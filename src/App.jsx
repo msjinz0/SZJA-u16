@@ -173,7 +173,7 @@ const PRPE=({player,events,onLogout,onRefresh})=>{
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:14,marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,fontWeight:700,color:C.tx}}>📝 Mai edzések RPE</span><span style={{fontSize:11,color:C.a,fontWeight:700}}>{Object.keys(doneEvs).length}/{todayEvs.length} kitöltve</span></div>
         {todayEvs.map(ev=>{const d=doneEvs[ev.id];return<div key={ev.id} onClick={()=>{if(!d){setRpe(5);setRpeSelEv(ev)}}} style={{background:d?C.gD:C.bg2,border:"1px solid "+(d?C.g+"40":C.brd),borderRadius:10,padding:14,marginBottom:6,cursor:d?"default":"pointer"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{ev.type==="match"?"🆚":"🏒""} {ev.title}</span><div style={{fontSize:11,color:C.txM,marginTop:2}}>{ev.time} · {ev.duration}p · {ev.subtype||ev.opponent||""}</div></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{ev.type==="match"?"🆚":"🏒"} {ev.title}</span><div style={{fontSize:11,color:C.txM,marginTop:2}}>{ev.time} · {ev.duration}p · {ev.subtype||ev.opponent||""}</div></div>
           {d?<div style={{textAlign:"center"}}><div style={{fontSize:20,fontWeight:900,color:rCol(d)}}>{d}/10</div><div style={{fontSize:9,color:C.b}}>{d*ev.duration} AU</div></div>:<span style={{fontSize:11,color:C.a,fontWeight:700}}>Kitöltés →</span>}
           </div>
         </div>})}
