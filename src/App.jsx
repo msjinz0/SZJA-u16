@@ -150,7 +150,7 @@ const PRPE=({player,events,onLogout,onRefresh})=>{
   const[wv,setWv]=useState(Object.fromEntries(WK.map(k=>[k,3])));
   const[rpeSelEv,setRpeSelEv]=useState(null);const[rpe,setRpe]=useState(5);
   const[doneEvs,setDoneEvs]=useState({});
-  const today=new Date().toISOString().split("T")[0];const todayEvs=events.filter(e=>e.date===today);
+  const today=new Date().toISOString().split("T")[0];const todayEvs=events.filter(e=>e.date===today&&(e.player_ids||[]).includes(player.id));
   const rCol=v=>v<=3?C.g:v<=6?C.y:v<=8?C.o:C.r;const ws=((Object.values(wv).reduce((a,b)=>a+b,0)/30)*100).toFixed(0);
 
   const saveWellness=async()=>{setSaving(true);await supabase.from("wellness_logs").upsert({player_id:player.id,date:today,...wv,wellness_score:Number(ws)},{onConflict:"player_id,date"});setSaving(false);setWellnessSaved(true);if(todayEvs.length>0)setStep("events");else setStep("done");if(onRefresh)onRefresh()};
@@ -292,7 +292,7 @@ const Cal=({roster,events,onRefresh,tTypes,dTypes,coachId,onOpenEvent,lTypes})=>
 
 
 // ═══ EVENT DETAIL VIEW ═══
-const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,onBack,coachId,userRole})=>{
+const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,injuries,onRefresh,onBack,coachId,userRole})=>{
   const[saving,setSaving]=useState(false);const[rpeModal,setRpeModal]=useState(null);const[fpModal,setFpModal]=useState(null);
   const[rpeVal,setRpeVal]=useState(5);const[fpJH,setFpJH]=useState("");const[fpPF,setFpPF]=useState("");const[fpAS,setFpAS]=useState("");
   const[wModal,setWModal]=useState(null);const[wv,setWv]=useState(Object.fromEntries(WK.map(k=>[k,3])));
@@ -301,11 +301,14 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
   const[localPids,setLocalPids]=useState(pIds);
   const toggleP=async(pid)=>{const np=localPids.includes(pid)?localPids.filter(x=>x!==pid):[...localPids,pid];setLocalPids(np);await supabase.from("events").update({player_ids:np}).eq("id",ev.id)};
   const evAtt=(attendanceLogs||[]).filter(a=>a.event_id===ev.id);
-  const getAtt=pid=>evAtt.find(a=>a.player_id===pid);
+  const getAtt=pid=>{const a=evAtt.find(a=>a.player_id===pid);if(a)return a;const actInj=(injuries||[]).find(inj=>inj.player_id===pid&&inj.rtp_phase<5);if(actInj)return{status:"injured"};return null};
   const setAtt=async(pid,status)=>{await supabase.from("attendance_logs").upsert({player_id:pid,event_id:ev.id,status},{onConflict:"player_id,event_id"});onRefresh()};
   const delRpe=async(pid)=>{await supabase.from("rpe_logs").delete().eq("player_id",pid).eq("event_id",ev.id);onRefresh()};
   const delWellness=async(pid)=>{await supabase.from("wellness_logs").delete().eq("player_id",pid).eq("date",today);onRefresh()};
   const isAdmin=userRole==="ADMIN";
+  // Which statuses need RPE
+  const needsRpe=status=>status==="full"||status==="rehab"||!status;
+  const isExcluded=status=>status==="absent"||status==="sick"||status==="injured";
   // Edit event
   const[editEv,setEditEv]=useState(false);const[editTitle,setEditTitle]=useState(ev.title);const[editTime,setEditTime]=useState(ev.time);const[editDur,setEditDur]=useState(String(ev.duration));const[editSub,setEditSub]=useState(ev.subtype||"");const[editLoc,setEditLoc]=useState(ev.location||"");const[editOpp,setEditOpp]=useState(ev.opponent||"");
   const saveEvEdit=async()=>{setSaving(true);await supabase.from("events").update({title:editTitle,time:editTime,duration:Number(editDur),subtype:editSub,location:editLoc,...(ev.type==="match"?{opponent:editOpp}:{})}).eq("id",ev.id);setSaving(false);setEditEv(false);onRefresh()};
@@ -314,7 +317,10 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
   // Get today's wellness and RPE for each player
   const todayW=wellnessLogs.filter(w=>w.date===today);const todayR=rpeLogs.filter(r=>r.event_id===ev.id);
   const getW=pid=>todayW.find(w=>w.player_id===pid);const getR=pid=>todayR.find(r=>r.player_id===pid);
-  const filled=todayR.length;const total=localPids.length;const avgRpe=todayR.length?Math.round(todayR.reduce((s,r)=>s+r.rpe,0)/todayR.length*10)/10:0;
+  // Count only players who need RPE (full/rehab participants)
+  const rpeEligible=localPids.filter(pid=>{const att=getAtt(pid);return needsRpe(att?.status)});
+  const filled=todayR.filter(r=>rpeEligible.includes(r.player_id)).length;const total=rpeEligible.length;
+  const avgRpe=todayR.length?Math.round(todayR.reduce((s,r)=>s+r.rpe,0)/todayR.length*10)/10:0;
   const avgWs=todayW.filter(w=>localPids.includes(w.player_id)).length?Math.round(todayW.filter(w=>localPids.includes(w.player_id)).reduce((s,w)=>s+(w.wellness_score||0),0)/todayW.filter(w=>localPids.includes(w.player_id)).length):0;
 
   const submitRpe=async(pid)=>{setSaving(true);await supabase.from("rpe_logs").upsert({player_id:pid,event_id:ev.id,date:today,rpe:rpeVal,duration:ev.duration},{onConflict:"player_id,event_id"});setSaving(false);setRpeModal(null);setRpeVal(5);onRefresh()};
@@ -366,19 +372,21 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
         </tr></thead>
         <tbody>{roster.filter(p=>p.active).map(p=>{
           const inEv=localPids.includes(p.id);const w=getW(p.id);const r=getR(p.id);
+          const att=getAtt(p.id);const pStatus=att?.status||"full";const excluded=isExcluded(pStatus);const rpeable=needsRpe(pStatus);
           const wsV=w?Math.round(w.wellness_score):null;const rpeV=r?r.rpe:null;const loadV=r?(r.rpe*ev.duration):null;
-          return<tr key={p.id} style={{borderBottom:"1px solid "+C.brd,opacity:inEv?1:.4}}>
+          return<tr key={p.id} style={{borderBottom:"1px solid "+C.brd,opacity:inEv?(excluded?.35:1):.2}}>
             <td style={{padding:"6px 10px"}}><div onClick={()=>toggleP(p.id)} style={{width:18,height:18,borderRadius:4,border:"2px solid "+(inEv?C.a:C.txD),background:inEv?C.a:"transparent",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#000",fontWeight:900}}>{inEv&&"✓"}</div></td>
-            <td style={{padding:"6px 10px",fontSize:12,fontWeight:600,color:C.tx}}>{p.name}</td>
+            <td style={{padding:"6px 10px",fontSize:12,fontWeight:600,color:C.tx}}>{p.name}{excluded&&<span style={{fontSize:9,marginLeft:4,color:(ATT_OPTS.find(o=>o.v===pStatus)||{}).c||C.txD}}>({(ATT_OPTS.find(o=>o.v===pStatus)||{}).l||pStatus})</span>}</td>
             <td style={{padding:"6px 10px",fontSize:11,color:C.txM}}>{p.pos}</td>
             <td style={{padding:"6px 10px"}}>{inEv&&<select value={getAtt(p.id)?.status||"full"} onChange={e=>setAtt(p.id,e.target.value)} style={{padding:"2px 4px",borderRadius:5,background:C.bg2,border:"1px solid "+C.brd,color:(ATT_OPTS.find(o=>o.v===(getAtt(p.id)?.status||"full"))||{}).c||C.tx,fontSize:9,fontWeight:700,outline:"none"}}>{ATT_OPTS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select>}</td>
             <td style={{padding:"6px 10px"}}>{wsV!==null?<span style={{fontSize:12,fontWeight:700,color:wsCol(wsV),background:wsCol(wsV)+"15",padding:"2px 8px",borderRadius:5}}>{wsV}%</span>:<span style={{fontSize:10,color:C.txD}}>—</span>}</td>
             <td style={{padding:"6px 10px"}}>{rpeV!==null?<span style={{fontSize:13,fontWeight:800,color:rCol(rpeV),background:rCol(rpeV)+"15",padding:"2px 8px",borderRadius:5}}>{rpeV}/10</span>:<span style={{fontSize:10,color:C.txD}}>—</span>}</td>
             <td style={{padding:"6px 10px"}}>{loadV!==null?<span style={{fontSize:11,fontWeight:700,color:C.b}}>{loadV} AU</span>:<span style={{fontSize:10,color:C.txD}}>—</span>}</td>
             <td style={{padding:"6px 10px"}}>{inEv&&<div style={{display:"flex",gap:3}}>
-              <Btn sz="sm" v={wsV?"green":"secondary"} onClick={()=>{if(w){setWv(Object.fromEntries(WK.map(k=>[k,w[k]||3])))}else{setWv(Object.fromEntries(WK.map(k=>[k,3])))};setWModal(p)}} style={{padding:"3px 7px",fontSize:9}}>{wsV?"💚":"💚 W"}</Btn>
-              <Btn sz="sm" v={rpeV?"blue":"secondary"} onClick={()=>{setRpeVal(rpeV||5);setRpeModal(p)}} style={{padding:"3px 7px",fontSize:9}}>{rpeV?"✅ RPE":"📝 RPE"}</Btn>
-              <Btn sz="sm" v="secondary" onClick={()=>setFpModal(p)} style={{padding:"3px 7px",fontSize:9}}>⚡FP</Btn>
+              {!excluded&&<Btn sz="sm" v={wsV?"green":"secondary"} onClick={()=>{if(w){setWv(Object.fromEntries(WK.map(k=>[k,w[k]||3])))}else{setWv(Object.fromEntries(WK.map(k=>[k,3])))};setWModal(p)}} style={{padding:"3px 7px",fontSize:9}}>{wsV?"💚":"💚 W"}</Btn>}
+              {rpeable&&<Btn sz="sm" v={rpeV?"blue":"secondary"} onClick={()=>{setRpeVal(rpeV||5);setRpeModal(p)}} style={{padding:"3px 7px",fontSize:9}}>{rpeV?"✅ RPE":"📝 RPE"}</Btn>}
+              {excluded&&<span style={{fontSize:9,color:C.txD,fontStyle:"italic"}}>RPE nem szükséges</span>}
+              {!excluded&&<Btn sz="sm" v="secondary" onClick={()=>setFpModal(p)} style={{padding:"3px 7px",fontSize:9}}>⚡FP</Btn>}
               {isAdmin&&rpeV&&<Btn sz="sm" v="danger" onClick={()=>{if(window.confirm("RPE törlése?"))delRpe(p.id)}} style={{padding:"3px 5px",fontSize:8}}>🗑R</Btn>}
               {isAdmin&&wsV&&<Btn sz="sm" v="danger" onClick={()=>{if(window.confirm("Wellness törlése?"))delWellness(p.id)}} style={{padding:"3px 5px",fontSize:8}}>🗑W</Btn>}
             </div>}</td>
@@ -844,7 +852,7 @@ export default function App() {
           {view==="team"&&<TeamDash players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
           {view==="player"&&selP&&<PlayerView player={selP} onBack={()=>setView("team")} injuries={injuries}/>}
           {view==="calendar"&&!selEv&&<Cal roster={roster} events={events} onRefresh={loadAll} tTypes={tT} dTypes={dT} coachId={auth.user.id} onOpenEvent={ev=>{setSelEv(ev)}} lTypes={lT}/>}
-          {view==="calendar"&&selEv&&<EvDetail event={selEv} roster={roster} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} attendanceLogs={attendanceLogs} onRefresh={loadAll} onBack={()=>setSelEv(null)} coachId={auth.user.id} userRole={userRole}/>}
+          {view==="calendar"&&selEv&&<EvDetail event={selEv} roster={roster} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} attendanceLogs={attendanceLogs} injuries={injuries} onRefresh={loadAll} onBack={()=>setSelEv(null)} coachId={auth.user.id} userRole={userRole}/>}
           {view==="injury"&&<InjMgmt roster={roster} injuries={injuries} onRefresh={loadAll} coachId={auth.user.id}/>}
           {view==="forceplate"&&<FPEntry roster={roster} onRefresh={loadAll}/>}
           {view==="roster"&&<RosterView players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
