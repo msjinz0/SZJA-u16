@@ -306,6 +306,9 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
   const delRpe=async(pid)=>{await supabase.from("rpe_logs").delete().eq("player_id",pid).eq("event_id",ev.id);onRefresh()};
   const delWellness=async(pid)=>{await supabase.from("wellness_logs").delete().eq("player_id",pid).eq("date",today);onRefresh()};
   const isAdmin=userRole==="ADMIN";
+  // Edit event
+  const[editEv,setEditEv]=useState(false);const[editTitle,setEditTitle]=useState(ev.title);const[editTime,setEditTime]=useState(ev.time);const[editDur,setEditDur]=useState(String(ev.duration));const[editSub,setEditSub]=useState(ev.subtype||"");const[editLoc,setEditLoc]=useState(ev.location||"");const[editOpp,setEditOpp]=useState(ev.opponent||"");
+  const saveEvEdit=async()=>{setSaving(true);await supabase.from("events").update({title:editTitle,time:editTime,duration:Number(editDur),subtype:editSub,location:editLoc,...(ev.type==="match"?{opponent:editOpp}:{})}).eq("id",ev.id);setSaving(false);setEditEv(false);onRefresh()};
   // Excel FP import
   const handleExcel=async(e)=>{const file=e.target.files[0];if(!file)return;const XLSX=await import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs");const buf=await file.arrayBuffer();const wb=XLSX.read(buf);const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws);setSaving(true);for(const row of rows){const name=(row.Name||row.name||row.Név||row.név||"").trim();const pl=roster.find(p=>p.name.toLowerCase().includes(name.toLowerCase()));if(!pl)continue;const jh=Number(row.JumpHeight||row.jump_height||row["Jump Height"]||row.jh||0);const pf=Number(row.PeakForce||row.peak_force||row["Peak Force"]||row.pf||0);const as=Number(row.Asymmetry||row.asymmetry||row.asym||row.Asym||0);if(jh||pf||as){await supabase.from("force_plate_logs").upsert({player_id:pl.id,date:today,jump_height:jh||null,peak_force:pf||null,asymmetry:as||null},{onConflict:"player_id,date"})}}setSaving(false);onRefresh();alert("Force plate adatok importálva!")};
   // Get today's wellness and RPE for each player
@@ -324,19 +327,33 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
     <Btn v="ghost" sz="sm" onClick={onBack} style={{marginBottom:12}}>← Vissza a naptárhoz</Btn>
     <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:14,padding:20,marginBottom:16}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
-        <div>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:10,height:10,borderRadius:"50%",background:eC}}/><h2 style={{fontSize:20,fontWeight:800,color:C.tx,margin:0}}>{ev.title}</h2></div>
-          <div style={{fontSize:12,color:C.txM}}>{ev.date} · {ev.time} · {ev.duration} perc · {ev.subtype||ev.opponent||""}</div>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:10,height:10,borderRadius:"50%",background:eC}}/><h2 style={{fontSize:20,fontWeight:800,color:C.tx,margin:0}}>{ev.title}</h2><Btn sz="sm" v="ghost" onClick={()=>setEditEv(true)} style={{padding:"2px 6px",fontSize:9}}>✏️</Btn></div>
+          <div style={{fontSize:12,color:C.txM}}>{ev.date} · {ev.time} · <strong>{ev.duration} perc</strong> · {ev.subtype||ev.opponent||""}</div>
           {ev.location&&<div style={{fontSize:11,color:C.txD,marginTop:2}}>📍 {ev.location}</div>}
         </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           <div style={{background:C.bg2,borderRadius:10,padding:"10px 16px",textAlign:"center"}}><div style={{fontSize:9,color:C.txD}}>KITÖLTVE</div><div style={{fontSize:20,fontWeight:800,color:filled===total?C.g:C.y}}>{filled}/{total}</div></div>
           <div style={{background:C.bg2,borderRadius:10,padding:"10px 16px",textAlign:"center"}}><div style={{fontSize:9,color:C.txD}}>ÁTL RPE</div><div style={{fontSize:20,fontWeight:800,color:rCol(avgRpe)}}>{avgRpe||"—"}</div></div>
           <div style={{background:C.bg2,borderRadius:10,padding:"10px 16px",textAlign:"center"}}><div style={{fontSize:9,color:C.txD}}>ÁTL WELLNESS</div><div style={{fontSize:20,fontWeight:800,color:wsCol(avgWs)}}>{avgWs||"—"}%</div></div>
+          <div style={{background:C.bg2,borderRadius:10,padding:"10px 16px",textAlign:"center"}}><div style={{fontSize:9,color:C.txD}}>ÖSSZ LOAD</div><div style={{fontSize:20,fontWeight:800,color:C.b}}>{todayR.reduce((s,r)=>s+r.rpe*(ev.duration||90),0)||"—"}</div></div>
         </div>
       </div>
       <div style={{marginTop:10,height:6,borderRadius:3,background:C.bg2,overflow:"hidden"}}><div style={{width:total?(filled/total*100)+"%":"0%",height:"100%",background:filled===total?C.g:C.y,borderRadius:3,transition:"width .3s"}}/></div>
     </div>
+
+    {/* Edit Event Modal */}
+    <Modal open={editEv} onClose={()=>setEditEv(false)} title="✏️ Edzés szerkesztése" w={480}>
+      <Inp label="Név" value={editTitle} onChange={setEditTitle}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}>
+        <Inp label="Időpont" value={editTime} onChange={setEditTime} type="time"/>
+        <Inp label="Időtartam (perc)" value={editDur} onChange={setEditDur} type="number"/>
+        <Inp label="Típus/Altípus" value={editSub} onChange={setEditSub}/>
+        <Inp label="Helyszín" value={editLoc} onChange={setEditLoc}/>
+      </div>
+      {ev.type==="match"&&<Inp label="Ellenfél" value={editOpp} onChange={setEditOpp}/>}
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><Btn v="secondary" onClick={()=>setEditEv(false)}>Mégse</Btn><Btn onClick={saveEvEdit} disabled={saving}>{saving?"⏳":"💾"} Mentés</Btn></div>
+    </Modal>
 
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,marginBottom:14}}>
       <Sec sub="Résztvevők, wellness, RPE, státusz">Játékos névsor ({localPids.length} fő)</Sec>
