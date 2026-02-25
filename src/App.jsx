@@ -8,7 +8,7 @@ import {
 import { supabase } from "./lib/supabase";
 
 // ════════════════════════════════════════════════════════
-// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v5.0
+// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v5.1
 // ════════════════════════════════════════════════════════
 // Supabase-integrated version — all data persists!
 
@@ -16,6 +16,7 @@ const C={bg:"#060a13",bg2:"#0c1121",card:"#111a2e",cardH:"#162040",brd:"#1c2a48"
 
 const POSITIONS=["C","LW","RW","LD","RD","G"];
 const POS_L={C:"Center",LW:"Bal szélső",RW:"Jobb szélső",LD:"Bal védő",RD:"Jobb védő",G:"Kapus"};
+const calcAge=bd=>{if(!bd)return null;const d=new Date(),b=new Date(bd);let a=d.getFullYear()-b.getFullYear();if(d.getMonth()<b.getMonth()||(d.getMonth()===b.getMonth()&&d.getDate()<b.getDate()))a--;return a};
 const WK=["sleep_quality","sleep_duration","soreness","fatigue","stress","mood"];
 const WL=["Alvásminőség","Alvásidő","Izomláz","Fáradtság","Stressz","Hangulat"];
 const DEF_TT=["Taktikai","Technikai","Power skating","Lövőedzés","Játékforma","Kapusedzés"];
@@ -23,6 +24,7 @@ const DEF_DT=["Erő","Kondíció","Kardió","Core/Stabilitás","Mobilitás","Spr
 const IL=["Váll","Csípőflexor","Térd (MCL)","Boka","Ágyék","Comb","Agyrázkódás","Egyéb"];
 const IT=["Kontakt sérülés","Nem-kontakt","Túlterhelés","Agyrázkódás","Izomhúzódás"];
 const RTP=["Sérült","Rehab","Egyéni on-ice","Kontaktmentes","Teljes edzés","Meccsképes"];
+const ATT_OPTS=[{v:"full",l:"✅ Teljes",c:"#10b981"},{v:"rehab",l:"🔄 Rehab",c:"#f59e0b"},{v:"absent",l:"❌ Hiányzik",c:"#ef4444"},{v:"sick",l:"🤒 Beteg",c:"#f97316"},{v:"injured",l:"🏥 Sérült",c:"#8b5cf6"},{v:"other",l:"📝 Egyéb",c:"#7f90b0"}];
 const _genPin=(digits=4)=>String(Math.floor(10**(digits-1)+Math.random()*(9*10**(digits-1)))).slice(0,digits);
 
 // ── Compute player metrics from wellness + rpe logs ──
@@ -122,38 +124,61 @@ const Login=({onLogin})=>{
 
 // ═══ PLAYER RPE (MOBILE) ═══
 const PRPE=({player,events,onLogout,onRefresh})=>{
-  const[selEv,setSelEv]=useState(null);const[rpe,setRpe]=useState(5);const[done,setDone]=useState(false);const[saving,setSaving]=useState(false);
+  const[step,setStep]=useState("wellness");const[saving,setSaving]=useState(false);const[wellnessSaved,setWellnessSaved]=useState(false);
   const[wv,setWv]=useState(Object.fromEntries(WK.map(k=>[k,3])));
+  const[rpeSelEv,setRpeSelEv]=useState(null);const[rpe,setRpe]=useState(5);
+  const[doneEvs,setDoneEvs]=useState({});
   const today=new Date().toISOString().split("T")[0];const todayEvs=events.filter(e=>e.date===today);
   const rCol=v=>v<=3?C.g:v<=6?C.y:v<=8?C.o:C.r;const ws=((Object.values(wv).reduce((a,b)=>a+b,0)/30)*100).toFixed(0);
 
-  const submitAll=async()=>{
-    setSaving(true);
-    // Save wellness
-    await supabase.from("wellness_logs").upsert({player_id:player.id,date:today,...wv,wellness_score:Number(ws)},{onConflict:"player_id,date"});
-    // Save RPE
-    if(selEv){await supabase.from("rpe_logs").upsert({player_id:player.id,event_id:selEv.id,date:today,rpe,duration:selEv.duration},{onConflict:"player_id,event_id"})}
-    setSaving(false);setDone(true);if(onRefresh)onRefresh();
-  };
+  const saveWellness=async()=>{setSaving(true);await supabase.from("wellness_logs").upsert({player_id:player.id,date:today,...wv,wellness_score:Number(ws)},{onConflict:"player_id,date"});setSaving(false);setWellnessSaved(true);if(todayEvs.length>0)setStep("events");else setStep("done");if(onRefresh)onRefresh()};
+  const saveRpe=async(ev)=>{setSaving(true);await supabase.from("rpe_logs").upsert({player_id:player.id,event_id:ev.id,date:today,rpe,duration:ev.duration},{onConflict:"player_id,event_id"});setSaving(false);setDoneEvs(p=>({...p,[ev.id]:rpe}));setRpeSelEv(null);setRpe(5);if(onRefresh)onRefresh()};
 
-  if(done)return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center",padding:40}}><div style={{fontSize:52}}>✅</div><h2 style={{color:C.tx,fontSize:18,fontWeight:700,marginTop:12}}>Rögzítve!</h2><p style={{color:C.txM,fontSize:13,marginTop:4}}>RPE: {rpe}/10 · Wellness: {ws}%</p><div style={{marginTop:16,display:"flex",gap:8,justifyContent:"center"}}><Btn onClick={()=>{setDone(false);setSelEv(null);setRpe(5)}}>Új kitöltés</Btn><Btn v="ghost" onClick={onLogout}>Kilépés</Btn></div></div></div>;
+  if(step==="done")return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center",padding:40}}>
+    <div style={{fontSize:52}}>✅</div><h2 style={{color:C.tx,fontSize:18,fontWeight:700,marginTop:12}}>Köszönjük!</h2>
+    <div style={{marginTop:12,background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,textAlign:"left"}}>
+      <div style={{fontSize:12,color:C.txM,marginBottom:8}}>💚 Wellness: <strong style={{color:C.a}}>{ws}%</strong></div>
+      {Object.keys(doneEvs).length>0&&<div>{todayEvs.filter(ev=>doneEvs[ev.id]).map(ev=><div key={ev.id} style={{fontSize:12,color:C.txM,marginBottom:4}}>📝 {ev.title}: <strong style={{color:rCol(doneEvs[ev.id])}}>{doneEvs[ev.id]}/10 RPE</strong> · <span style={{color:C.b}}>{doneEvs[ev.id]*ev.duration} AU</span></div>)}</div>}
+    </div>
+    <div style={{marginTop:16,display:"flex",gap:8,justifyContent:"center"}}><Btn onClick={()=>{setStep("wellness");setWellnessSaved(false);setDoneEvs({});setWv(Object.fromEntries(WK.map(k=>[k,3])))}}>Új kitöltés</Btn><Btn v="ghost" onClick={onLogout}>Kilépés</Btn></div>
+  </div></div>;
 
   return<div style={{minHeight:"100vh",background:C.bg,padding:16,maxWidth:460,margin:"0 auto"}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><div><h2 style={{fontSize:16,fontWeight:800,color:C.tx,margin:0}}>Szia, {player.name.split(" ").pop()}! 🏒</h2><p style={{fontSize:11,color:C.txM,margin:"3px 0 0"}}>SZJA U16</p></div><Btn v="ghost" sz="sm" onClick={onLogout}>Kilépés</Btn></div>
-    {!selEv?<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><div><h2 style={{fontSize:16,fontWeight:800,color:C.tx,margin:0}}>Szia, {player.name.split(" ").pop()}! 🏒</h2><p style={{fontSize:11,color:C.txM,margin:"3px 0 0"}}>SZJA U16</p></div><Btn v="ghost" sz="sm" onClick={onLogout}>Kilépés</Btn></div>
+
+    {/* Step indicators */}
+    <div style={{display:"flex",gap:4,marginBottom:16}}>{[{k:"wellness",l:"💚 Wellness"},{k:"events",l:"📝 RPE ("+todayEvs.length+")"}].map(s=><div key={s.k} style={{flex:1,padding:"8px 12px",borderRadius:8,background:step===s.k?C.aD:C.bg2,border:"1px solid "+(step===s.k?C.a+"50":C.brd),textAlign:"center"}}><span style={{fontSize:11,fontWeight:700,color:step===s.k?C.a:C.txM}}>{s.l}</span>{s.k==="wellness"&&wellnessSaved&&<span style={{fontSize:10,color:C.g,marginLeft:4}}>✅</span>}</div>)}</div>
+
+    {step==="wellness"&&<div>
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:14,marginBottom:14}}>
         <div style={{fontSize:13,fontWeight:700,color:C.tx,marginBottom:10}}>💚 Wellness <span style={{color:C.a}}>{ws}%</span></div>
         {WL.map((l,i)=><div key={i} style={{marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span style={{fontSize:11,color:C.txM}}>{l}</span><span style={{fontSize:11,fontWeight:700,color:C.a}}>{wv[WK[i]]}/5</span></div><div style={{display:"flex",gap:3}}>{[1,2,3,4,5].map(v=><button key={v} onClick={()=>setWv(p=>({...p,[WK[i]]:v}))} style={{flex:1,height:30,borderRadius:6,border:"none",background:wv[WK[i]]>=v?(v<=2?C.rD:v<=3?C.yD:C.gD):C.bg2,color:wv[WK[i]]>=v?(v<=2?C.r:v<=3?C.y:C.g):C.txD,cursor:"pointer",fontWeight:700,fontSize:11}}>{v}</button>)}</div></div>)}
       </div>
-      <Sec sub="Válassz RPE kitöltéshez">Mai események</Sec>
-      {todayEvs.length===0?<div style={{textAlign:"center",padding:30,background:C.card,borderRadius:12}}><p style={{color:C.txM}}>📅 Nincs mai esemény</p><Btn style={{marginTop:12}} onClick={submitAll} disabled={saving}>{saving?"⏳":"💾"} Csak wellness mentése</Btn></div>
-      :todayEvs.map(ev=><div key={ev.id} onClick={()=>setSelEv(ev)} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:14,marginBottom:8,cursor:"pointer"}}><div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{ev.type==="match"?"🏒":"⛸️"} {ev.title}</span><span style={{fontSize:11,color:C.txM}}>{ev.time}</span></div><div style={{fontSize:11,color:C.txM,marginTop:3}}>{ev.duration}p · {ev.subtype||ev.opponent||""}</div></div>)}
-    </div>:<div>
-      <Btn v="ghost" sz="sm" onClick={()=>setSelEv(null)}>← Vissza</Btn>
-      <div style={{textAlign:"center",margin:"24px 0"}}><div style={{fontSize:64,fontWeight:900,color:rCol(rpe),lineHeight:1}}>{rpe}</div><div style={{fontSize:12,color:C.txM,marginTop:6}}>{rpe<=2?"Nagyon könnyű":rpe<=4?"Könnyű":rpe<=6?"Közepes":rpe<=8?"Nehéz":"Maximális"}</div></div>
+      <Btn full sz="lg" onClick={saveWellness} disabled={saving}>{saving?"⏳":"💾"} Wellness mentése</Btn>
+      {wellnessSaved&&todayEvs.length>0&&<Btn full v="blue" sz="md" onClick={()=>setStep("events")} style={{marginTop:8}}>📝 Tovább az RPE-hez →</Btn>}
+      {wellnessSaved&&todayEvs.length===0&&<Btn full v="green" sz="md" onClick={()=>setStep("done")} style={{marginTop:8}}>✅ Kész</Btn>}
+    </div>}
+
+    {step==="events"&&!rpeSelEv&&<div>
+      <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:14,marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,fontWeight:700,color:C.tx}}>📝 Mai edzések RPE</span><span style={{fontSize:11,color:C.a,fontWeight:700}}>{Object.keys(doneEvs).length}/{todayEvs.length} kitöltve</span></div>
+        {todayEvs.map(ev=>{const d=doneEvs[ev.id];return<div key={ev.id} onClick={()=>{if(!d){setRpe(5);setRpeSelEv(ev)}}} style={{background:d?C.gD:C.bg2,border:"1px solid "+(d?C.g+"40":C.brd),borderRadius:10,padding:14,marginBottom:6,cursor:d?"default":"pointer"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{ev.type==="match"?"🏒":"⛸️"} {ev.title}</span><div style={{fontSize:11,color:C.txM,marginTop:2}}>{ev.time} · {ev.duration}p · {ev.subtype||ev.opponent||""}</div></div>
+          {d?<div style={{textAlign:"center"}}><div style={{fontSize:20,fontWeight:900,color:rCol(d)}}>{d}/10</div><div style={{fontSize:9,color:C.b}}>{d*ev.duration} AU</div></div>:<span style={{fontSize:11,color:C.a,fontWeight:700}}>Kitöltés →</span>}
+          </div>
+        </div>})}
+      </div>
+      <div style={{display:"flex",gap:8}}><Btn full v="green" sz="lg" onClick={()=>setStep("done")}>✅ Befejezés</Btn></div>
+      {Object.keys(doneEvs).length<todayEvs.length&&<p style={{fontSize:10,color:C.txD,textAlign:"center",marginTop:8}}>Nem kötelező minden edzéshez RPE-t kitölteni</p>}
+    </div>}
+
+    {step==="events"&&rpeSelEv&&<div>
+      <Btn v="ghost" sz="sm" onClick={()=>setRpeSelEv(null)}>← Vissza</Btn>
+      <div style={{textAlign:"center",marginTop:8,marginBottom:6}}><span style={{fontSize:12,fontWeight:700,color:C.tx}}>{rpeSelEv.type==="match"?"🏒":"⛸️"} {rpeSelEv.title}</span><div style={{fontSize:10,color:C.txM}}>{rpeSelEv.time} · {rpeSelEv.duration}p</div></div>
+      <div style={{textAlign:"center",margin:"16px 0"}}><div style={{fontSize:64,fontWeight:900,color:rCol(rpe),lineHeight:1}}>{rpe}</div><div style={{fontSize:12,color:C.txM,marginTop:6}}>{rpe<=2?"Nagyon könnyű":rpe<=4?"Könnyű":rpe<=6?"Közepes":rpe<=8?"Nehéz":"Maximális"}</div></div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:20}}>{[1,2,3,4,5,6,7,8,9,10].map(v=><button key={v} onClick={()=>setRpe(v)} style={{height:46,borderRadius:10,border:rpe===v?"2px solid "+rCol(v):"1px solid "+C.brd,background:rpe===v?rCol(v)+"20":C.card,color:rpe===v?rCol(v):C.txM,fontSize:16,fontWeight:800,cursor:"pointer"}}>{v}</button>)}</div>
-      <div style={{fontSize:11,color:C.txM,textAlign:"center",marginBottom:14}}>Terhelés: <strong style={{color:C.b}}>{rpe*selEv.duration} AU</strong></div>
-      <Btn full sz="lg" onClick={submitAll} disabled={saving}>{saving?"⏳ Mentés...":"💾 Mentés"}</Btn>
+      <div style={{fontSize:11,color:C.txM,textAlign:"center",marginBottom:14}}>Terhelés: <strong style={{color:C.b}}>{rpe*rpeSelEv.duration} AU</strong></div>
+      <Btn full sz="lg" onClick={()=>saveRpe(rpeSelEv)} disabled={saving}>{saving?"⏳ Mentés...":"💾 RPE mentése"}</Btn>
     </div>}
   </div>;
 };
@@ -178,12 +203,12 @@ const TeamDash=({players,onSelect})=>{
 // ═══ PLAYER DETAIL ═══
 const PlayerView=({player:p,onBack,injuries})=>{
   const[tab,setTab]=useState("overview");const pInj=injuries.filter(x=>x.player_id===p.id);
-  const tabs=[{k:"overview",l:"📊 Áttekintés"},{k:"load",l:"🏋️ Terhelés"},{k:"tests",l:"🧪 Tesztek"},{k:"injury",l:"🏥 ("+pInj.length+")"}];
+  const tabs=[{k:"overview",l:"📊 Áttekintés"},{k:"load",l:"🏋️ Terhelés"},{k:"tests",l:"🧪 Tesztek"},{k:"injury",l:"🏥 Sérülések ("+pInj.length+")"},{k:"history",l:"📜 Előzmények"}];
   const acwrData=p.days.slice(7).map((_,i)=>{const di=i+7;const ac2=p.days.slice(di-6,di+1).reduce((s,d)=>s+d.load,0);const ch2=p.days.slice(0,di+1).reduce((s,d)=>s+d.load,0)/4;return{dl:p.days[di].dl,v:ch2>0?Math.round(ac2/ch2*100)/100:0}});
   return<div>
     <Btn v="ghost" sz="sm" onClick={onBack} style={{marginBottom:10}}>← Vissza</Btn>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:14}}>
-      <div style={{display:"flex",alignItems:"center",gap:12}}><div style={{width:46,height:46,borderRadius:12,background:`linear-gradient(135deg,${C.a}30,${C.b}30)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800,color:C.a}}>{p.name.split(" ").map(n=>n[0]).join("")}</div><div><h2 style={{fontSize:20,fontWeight:800,color:C.tx,margin:0}}>{p.name}</h2><div style={{fontSize:12,color:C.txM}}>{POS_L[p.pos]} · {p.age}é · {p.height}cm/{p.weight}kg</div></div><Badge status={p.st}/></div>
+      <div style={{display:"flex",alignItems:"center",gap:12}}><div style={{width:46,height:46,borderRadius:12,background:`linear-gradient(135deg,${C.a}30,${C.b}30)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800,color:C.a}}>{p.name.split(" ").map(n=>n[0]).join("")}</div><div><h2 style={{fontSize:20,fontWeight:800,color:C.tx,margin:0}}>{p.name}</h2><div style={{fontSize:12,color:C.txM}}>{POS_L[p.pos]} · {p.birth_date?calcAge(p.birth_date):p.age}é{p.birth_date?" ("+p.birth_date+")":""} · {p.height}cm/{p.weight}kg</div></div><Badge status={p.st}/></div>
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:"12px 20px",textAlign:"center"}}><div style={{fontSize:10,color:C.txM}}>READINESS</div><div style={{fontSize:34,fontWeight:900,color:p.st==="GREEN"?C.g:p.st==="YELLOW"?C.y:C.r}}>{(p.rd*100).toFixed(0)}</div></div>
     </div>
     {p.al.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:12}}>{p.al.map((a,i)=><span key={i} style={{fontSize:10,padding:"3px 8px",borderRadius:5,fontWeight:600,background:a.t==="d"?C.rD:C.yD,color:a.t==="d"?C.r:C.y}}>⚠ {a.m}</span>)}</div>}
@@ -201,7 +226,22 @@ const PlayerView=({player:p,onBack,injuries})=>{
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}><Sec>ACWR Trend</Sec><ResponsiveContainer width="100%" height={200}><AreaChart data={acwrData}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="dl" tick={{fontSize:8,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}} domain={[0,2.2]}/><Tooltip content={<CTip/>}/><ReferenceLine y={1.5} stroke={C.r} strokeDasharray="4 4"/><ReferenceLine y={0.8} stroke={C.y} strokeDasharray="4 4"/><Area type="monotone" dataKey="v" name="ACWR" stroke={C.b} fill={C.b} fillOpacity={.1}/></AreaChart></ResponsiveContainer></div>
     </div>}
     {tab==="tests"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>{p.tests.map((t,i)=><div key={i} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:10,padding:14}}><div style={{fontSize:10,color:C.txM,marginBottom:4}}>{t.t}</div><div style={{fontSize:22,fontWeight:800,color:[C.b,C.p,C.g,C.cy,C.o][i%5]}}>{t.v}</div></div>)}</div>}
-    {tab==="injury"&&<div>{pInj.length===0?<p style={{textAlign:"center",padding:40,color:C.g}}>✅ Nincs aktív sérülés</p>:pInj.map(inj=><div key={inj.id} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:14,fontWeight:700,color:C.tx}}>{inj.location} — {inj.type}</span><RBadge phase={inj.rtp_phase}/></div><div style={{display:"flex",gap:3,marginTop:8}}>{RTP.map((_,j)=><div key={j} style={{flex:1,height:5,borderRadius:3,background:j<=inj.rtp_phase?(j<=1?C.r:j<=3?C.y:C.g):C.bg2}}/>)}</div></div>)}</div>}
+    {tab==="injury"&&<div>{pInj.length===0?<p style={{textAlign:"center",padding:40,color:C.g}}>✅ Nincs aktív sérülés</p>:pInj.map(inj=><div key={inj.id} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:14,fontWeight:700,color:C.tx}}>{inj.location} — {inj.type}</span><RBadge phase={inj.rtp_phase}/></div><div style={{fontSize:11,color:C.txM}}>Sérülés: {inj.date}{inj.expected_return?" → Várható: "+inj.expected_return:""}{inj.closed_date?" · Lezárva: "+inj.closed_date:""}</div>{inj.notes&&<div style={{fontSize:10,color:C.txD,marginTop:3,fontStyle:"italic"}}>{inj.notes}</div>}<div style={{display:"flex",gap:3,marginTop:8}}>{RTP.map((_,j)=><div key={j} style={{flex:1,height:5,borderRadius:3,background:j<=inj.rtp_phase?(j<=1?C.r:j<=3?C.y:C.g):C.bg2}}/>)}</div></div>)}</div>}
+    {tab==="history"&&<div>
+      <Sec>📜 Sérülés-előzmények</Sec>
+      {pInj.length===0?<p style={{textAlign:"center",padding:30,color:C.txM}}>Nincs rögzített sérülés</p>
+      :<div style={{position:"relative",paddingLeft:20}}>{pInj.sort((a,b)=>b.date.localeCompare(a.date)).map((inj,i)=><div key={inj.id} style={{position:"relative",marginBottom:16,paddingLeft:16}}>
+        <div style={{position:"absolute",left:-20,top:0,width:12,height:12,borderRadius:"50%",background:inj.rtp_phase>=5?C.g:inj.rtp_phase>=3?C.y:C.r,border:"2px solid "+C.bg}}/>
+        {i<pInj.length-1&&<div style={{position:"absolute",left:-15,top:14,width:2,height:"calc(100% + 4px)",background:C.brd}}/>}
+        <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:10,padding:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{inj.location}</span><RBadge phase={inj.rtp_phase}/></div>
+          <div style={{fontSize:11,color:C.txM}}>{inj.type} · {inj.date}</div>
+          {inj.expected_return&&<div style={{fontSize:10,color:C.txD}}>Várható visszatérés: {inj.expected_return}</div>}
+          {inj.closed_date&&<div style={{fontSize:10,color:C.g}}>✅ Lezárva: {inj.closed_date}</div>}
+          {inj.notes&&<div style={{fontSize:10,color:C.txD,marginTop:3,fontStyle:"italic"}}>{inj.notes}</div>}
+        </div>
+      </div>)}</div>}
+    </div>}
   </div>;
 };
 
@@ -230,14 +270,22 @@ const Cal=({roster,events,onRefresh,tTypes,dTypes,coachId,onOpenEvent})=>{
 
 
 // ═══ EVENT DETAIL VIEW ═══
-const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,onRefresh,onBack,coachId})=>{
+const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,onBack,coachId,userRole})=>{
   const[saving,setSaving]=useState(false);const[rpeModal,setRpeModal]=useState(null);const[fpModal,setFpModal]=useState(null);
   const[rpeVal,setRpeVal]=useState(5);const[fpJH,setFpJH]=useState("");const[fpPF,setFpPF]=useState("");const[fpAS,setFpAS]=useState("");
   const[wModal,setWModal]=useState(null);const[wv,setWv]=useState(Object.fromEntries(WK.map(k=>[k,3])));
   const today=ev.date;const eC=ev.type==="match"?C.g:ev.type==="training"?C.b:C.o;
-  const pIds=ev.player_ids||[];const evPlayers=roster.filter(p=>pIds.includes(p.id));
+  const pIds=ev.player_ids||[];
   const[localPids,setLocalPids]=useState(pIds);
   const toggleP=async(pid)=>{const np=localPids.includes(pid)?localPids.filter(x=>x!==pid):[...localPids,pid];setLocalPids(np);await supabase.from("events").update({player_ids:np}).eq("id",ev.id)};
+  const evAtt=(attendanceLogs||[]).filter(a=>a.event_id===ev.id);
+  const getAtt=pid=>evAtt.find(a=>a.player_id===pid);
+  const setAtt=async(pid,status)=>{await supabase.from("attendance_logs").upsert({player_id:pid,event_id:ev.id,status},{onConflict:"player_id,event_id"});onRefresh()};
+  const delRpe=async(pid)=>{await supabase.from("rpe_logs").delete().eq("player_id",pid).eq("event_id",ev.id);onRefresh()};
+  const delWellness=async(pid)=>{await supabase.from("wellness_logs").delete().eq("player_id",pid).eq("date",today);onRefresh()};
+  const isAdmin=userRole==="ADMIN";
+  // Excel FP import
+  const handleExcel=async(e)=>{const file=e.target.files[0];if(!file)return;const XLSX=await import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs");const buf=await file.arrayBuffer();const wb=XLSX.read(buf);const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws);setSaving(true);for(const row of rows){const name=(row.Name||row.name||row.Név||row.név||"").trim();const pl=roster.find(p=>p.name.toLowerCase().includes(name.toLowerCase()));if(!pl)continue;const jh=Number(row.JumpHeight||row.jump_height||row["Jump Height"]||row.jh||0);const pf=Number(row.PeakForce||row.peak_force||row["Peak Force"]||row.pf||0);const as=Number(row.Asymmetry||row.asymmetry||row.asym||row.Asym||0);if(jh||pf||as){await supabase.from("force_plate_logs").upsert({player_id:pl.id,date:today,jump_height:jh||null,peak_force:pf||null,asymmetry:as||null},{onConflict:"player_id,date"})}}setSaving(false);onRefresh();alert("Force plate adatok importálva!")};
   // Get today's wellness and RPE for each player
   const todayW=wellnessLogs.filter(w=>w.date===today);const todayR=rpeLogs.filter(r=>r.event_id===ev.id);
   const getW=pid=>todayW.find(w=>w.player_id===pid);const getR=pid=>todayR.find(r=>r.player_id===pid);
@@ -268,11 +316,14 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,onRefresh,onBack,coachId})
       <div style={{marginTop:10,height:6,borderRadius:3,background:C.bg2,overflow:"hidden"}}><div style={{width:total?(filled/total*100)+"%":"0%",height:"100%",background:filled===total?C.g:C.y,borderRadius:3,transition:"width .3s"}}/></div>
     </div>
 
-    <Sec sub="Jelöld ki a résztvevőket, rögzíts adatokat">Játékos névsor ({localPids.length} fő)</Sec>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,marginBottom:14}}>
+      <Sec sub="Résztvevők, wellness, RPE, státusz">Játékos névsor ({localPids.length} fő)</Sec>
+      <div style={{display:"flex",gap:6,alignItems:"center"}}><label style={{display:"inline-flex",alignItems:"center",gap:4,padding:"5px 12px",borderRadius:8,background:C.pD,color:C.p,fontSize:11,fontWeight:700,cursor:"pointer"}}><span>📁 Excel FP import</span><input type="file" accept=".xlsx,.xls,.csv" onChange={handleExcel} style={{display:"none"}}/></label>{saving&&<span style={{fontSize:10,color:C.a}}>⏳</span>}</div>
+    </div>
     <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,overflow:"hidden"}}>
       <table style={{width:"100%",borderCollapse:"collapse"}}>
         <thead><tr style={{borderBottom:"1px solid "+C.brd}}>
-          {["✓","Név","Poz","Wellness","RPE","Load","Műveletek"].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:"left",fontSize:10,fontWeight:700,color:C.txM,textTransform:"uppercase"}}>{h}</th>)}
+          {["✓","Név","Poz","Státusz","Wellness","RPE","Load","Műveletek"].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:"left",fontSize:10,fontWeight:700,color:C.txM,textTransform:"uppercase"}}>{h}</th>)}
         </tr></thead>
         <tbody>{roster.filter(p=>p.active).map(p=>{
           const inEv=localPids.includes(p.id);const w=getW(p.id);const r=getR(p.id);
@@ -281,6 +332,7 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,onRefresh,onBack,coachId})
             <td style={{padding:"6px 10px"}}><div onClick={()=>toggleP(p.id)} style={{width:18,height:18,borderRadius:4,border:"2px solid "+(inEv?C.a:C.txD),background:inEv?C.a:"transparent",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#000",fontWeight:900}}>{inEv&&"✓"}</div></td>
             <td style={{padding:"6px 10px",fontSize:12,fontWeight:600,color:C.tx}}>{p.name}</td>
             <td style={{padding:"6px 10px",fontSize:11,color:C.txM}}>{p.pos}</td>
+            <td style={{padding:"6px 10px"}}>{inEv&&<select value={getAtt(p.id)?.status||"full"} onChange={e=>setAtt(p.id,e.target.value)} style={{padding:"2px 4px",borderRadius:5,background:C.bg2,border:"1px solid "+C.brd,color:(ATT_OPTS.find(o=>o.v===(getAtt(p.id)?.status||"full"))||{}).c||C.tx,fontSize:9,fontWeight:700,outline:"none"}}>{ATT_OPTS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}</select>}</td>
             <td style={{padding:"6px 10px"}}>{wsV!==null?<span style={{fontSize:12,fontWeight:700,color:wsCol(wsV),background:wsCol(wsV)+"15",padding:"2px 8px",borderRadius:5}}>{wsV}%</span>:<span style={{fontSize:10,color:C.txD}}>—</span>}</td>
             <td style={{padding:"6px 10px"}}>{rpeV!==null?<span style={{fontSize:13,fontWeight:800,color:rCol(rpeV),background:rCol(rpeV)+"15",padding:"2px 8px",borderRadius:5}}>{rpeV}/10</span>:<span style={{fontSize:10,color:C.txD}}>—</span>}</td>
             <td style={{padding:"6px 10px"}}>{loadV!==null?<span style={{fontSize:11,fontWeight:700,color:C.b}}>{loadV} AU</span>:<span style={{fontSize:10,color:C.txD}}>—</span>}</td>
@@ -288,6 +340,8 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,onRefresh,onBack,coachId})
               <Btn sz="sm" v={wsV?"green":"secondary"} onClick={()=>{if(w){setWv(Object.fromEntries(WK.map(k=>[k,w[k]||3])))}else{setWv(Object.fromEntries(WK.map(k=>[k,3])))};setWModal(p)}} style={{padding:"3px 7px",fontSize:9}}>{wsV?"💚":"💚 W"}</Btn>
               <Btn sz="sm" v={rpeV?"blue":"secondary"} onClick={()=>{setRpeVal(rpeV||5);setRpeModal(p)}} style={{padding:"3px 7px",fontSize:9}}>{rpeV?"✅ RPE":"📝 RPE"}</Btn>
               <Btn sz="sm" v="secondary" onClick={()=>setFpModal(p)} style={{padding:"3px 7px",fontSize:9}}>⚡FP</Btn>
+              {isAdmin&&rpeV&&<Btn sz="sm" v="danger" onClick={()=>{if(window.confirm("RPE törlése?"))delRpe(p.id)}} style={{padding:"3px 5px",fontSize:8}}>🗑R</Btn>}
+              {isAdmin&&wsV&&<Btn sz="sm" v="danger" onClick={()=>{if(window.confirm("Wellness törlése?"))delWellness(p.id)}} style={{padding:"3px 5px",fontSize:8}}>🗑W</Btn>}
             </div>}</td>
           </tr>})}</tbody>
       </table>
@@ -332,6 +386,7 @@ const InjMgmt=({roster,injuries,onRefresh,coachId})=>{
       {inj.notes&&<div style={{fontSize:11,color:C.txD,marginTop:4,fontStyle:"italic"}}>{inj.notes}</div>}
       <div style={{display:"flex",gap:3,marginTop:8}}>{RTP.map((_,j)=><div key={j} style={{flex:1,height:5,borderRadius:3,background:j<=inj.rtp_phase?(j<=1?C.r:j<=3?C.y:C.g):C.bg2}}/>)}</div>
       <div style={{marginTop:8,display:"flex",gap:3,flexWrap:"wrap"}}>{RTP.map((ph,j)=><Btn key={j} sz="sm" v={j===inj.rtp_phase?"primary":"ghost"} onClick={()=>updRtp(inj.id,j)} style={{padding:"3px 7px",fontSize:9}}>{ph}</Btn>)}</div>
+        <div style={{marginTop:6,display:"flex",gap:4}}>{inj.rtp_phase>=5&&!inj.closed_date&&<Btn sz="sm" v="green" onClick={async()=>{await supabase.from("injuries").update({closed_date:new Date().toISOString().split("T")[0],is_active:false}).eq("id",inj.id);onRefresh()}} style={{padding:"3px 8px",fontSize:9}}>✅ Lezárás</Btn>}{inj.closed_date&&<span style={{fontSize:10,color:C.g,fontWeight:600}}>Lezárva: {inj.closed_date}</span>}</div>
     </div>})}
     <Modal open={modal} onClose={()=>setModal(false)} title="🏥 Új sérülés">
       <Inp label="Játékos" value={fP} onChange={setFP} opts={[{v:"",l:"Válassz..."},...roster.filter(p=>p.active).map(p=>({v:String(p.id),l:p.name+" ("+p.pos+")"}))]}/>
@@ -346,13 +401,13 @@ const InjMgmt=({roster,injuries,onRefresh,coachId})=>{
 // ═══ SETTINGS (Players + Coaches + Types) ═══
 const Sett=({roster,coaches,onRefresh,tT,dT,userRole})=>{
   const[pTab,setPTab]=useState("players");
-  const[pModal,setPModal]=useState(null);const[fName,setFName]=useState("");const[fPos,setFPos]=useState("C");const[fAge,setFAge]=useState("15");const[fHt,setFHt]=useState("175");const[fWt,setFWt]=useState("68");
+  const[pModal,setPModal]=useState(null);const[fName,setFName]=useState("");const[fPos,setFPos]=useState("C");const[fAge,setFAge]=useState("15");const[fHt,setFHt]=useState("175");const[fWt,setFWt]=useState("68");const[fBd,setFBd]=useState("");
   const[cModal,setCModal]=useState(null);const[cName,setCName]=useState("");const[cRole,setCRole]=useState("COACH");const[cPin,setCPin]=useState("");
   const[nT,setNT]=useState("");const[nD,setND]=useState("");
 
-  const openEditP=p=>{setFName(p.name);setFPos(p.pos);setFAge(String(p.age));setFHt(String(p.height));setFWt(String(p.weight));setPModal(p)};
-  const openNewP=()=>{setFName("");setFPos("C");setFAge("15");setFHt("175");setFWt("68");setPModal("new")};
-  const saveP=async()=>{if(!fName.trim())return;if(pModal==="new"){await supabase.from("players").insert({name:fName.trim(),pos:fPos,age:Number(fAge),height:Number(fHt),weight:Number(fWt),pin:_genPin()})}else{await supabase.from("players").update({name:fName.trim(),pos:fPos,age:Number(fAge),height:Number(fHt),weight:Number(fWt)}).eq("id",pModal.id)}setPModal(null);onRefresh()};
+  const openEditP=p=>{setFName(p.name);setFPos(p.pos);setFAge(String(p.age));setFHt(String(p.height));setFWt(String(p.weight));setFBd(p.birth_date||"");setPModal(p)};
+  const openNewP=()=>{setFName("");setFPos("C");setFAge("15");setFHt("175");setFWt("68");setFBd("");setPModal("new")};
+  const saveP=async()=>{if(!fName.trim())return;const bd=fBd||null;const age=bd?calcAge(bd):Number(fAge);if(pModal==="new"){await supabase.from("players").insert({name:fName.trim(),pos:fPos,age,height:Number(fHt),weight:Number(fWt),birth_date:bd,pin:_genPin()})}else{await supabase.from("players").update({name:fName.trim(),pos:fPos,age,height:Number(fHt),weight:Number(fWt),birth_date:bd}).eq("id",pModal.id)}setPModal(null);onRefresh()};
   const toggleP=async(id,active)=>{await supabase.from("players").update({active:!active}).eq("id",id);onRefresh()};
   const regenPinP=async(id)=>{await supabase.from("players").update({pin:_genPin()}).eq("id",id);onRefresh()};
   const delP=async(id)=>{if(window.confirm("Biztosan törlöd?")){await supabase.from("players").delete().eq("id",id);onRefresh()}};
@@ -386,7 +441,7 @@ const Sett=({roster,coaches,onRefresh,tT,dT,userRole})=>{
         <td style={{padding:"6px 10px"}}><div onClick={()=>toggleP(p.id,p.active)} style={{width:16,height:16,borderRadius:4,border:"2px solid "+(p.active?C.a:C.txD),background:p.active?C.a:"transparent",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#000",fontWeight:900}}>{p.active&&"✓"}</div></td>
         <td style={{padding:"6px 10px",fontSize:12,fontWeight:600,color:C.tx}}>{p.name}</td>
         <td style={{padding:"6px 10px",fontSize:11,color:C.txM}}>{p.pos}</td>
-        <td style={{padding:"6px 10px",fontSize:11,color:C.txM}}>{p.age}é</td>
+        <td style={{padding:"6px 10px",fontSize:11,color:C.txM}}>{p.birth_date?calcAge(p.birth_date):p.age}é</td>
         <td style={{padding:"6px 10px",fontSize:11,color:C.txM}}>{p.height}/{p.weight}</td>
         <td style={{padding:"6px 10px"}}><span style={{fontSize:13,color:C.a,fontFamily:"monospace",fontWeight:800,letterSpacing:2}}>{p.pin}</span></td>
         <td style={{padding:"6px 10px"}}><div style={{display:"flex",gap:4}}><Btn sz="sm" v="secondary" onClick={()=>openEditP(p)} style={{padding:"3px 8px",fontSize:9}}>✏️</Btn><Btn sz="sm" v="secondary" onClick={()=>regenPinP(p.id)} style={{padding:"3px 8px",fontSize:9}}>🔄</Btn><Btn sz="sm" v="danger" onClick={()=>delP(p.id)} style={{padding:"3px 8px",fontSize:9}}>🗑</Btn></div></td>
@@ -414,6 +469,7 @@ const Sett=({roster,coaches,onRefresh,tT,dT,userRole})=>{
     <Modal open={pModal!==null} onClose={()=>setPModal(null)} title={pModal==="new"?"➕ Új játékos":"✏️ Szerkesztés"} w={480}>
       <Inp label="Teljes név" value={fName} onChange={setFName} ph="Vezetéknév Keresztnév"/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}><Inp label="Pozíció" value={fPos} onChange={setFPos} opts={POSITIONS.map(p=>({v:p,l:p+" — "+POS_L[p]}))}/><Inp label="Életkor" value={fAge} onChange={setFAge} type="number"/><Inp label="Magasság" value={fHt} onChange={setFHt} type="number"/><Inp label="Súly" value={fWt} onChange={setFWt} type="number"/></div>
+        <Inp label="Születési dátum" value={fBd} onChange={setFBd} type="date"/>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><Btn v="secondary" onClick={()=>setPModal(null)}>Mégse</Btn><Btn onClick={saveP} disabled={!fName.trim()}>💾</Btn></div>
     </Modal>
     <Modal open={cModal!==null} onClose={()=>setCModal(null)} title={cModal==="new"?"➕ Új edző":"✏️ Edző szerkesztése"} w={480}>
@@ -454,13 +510,14 @@ export default function App() {
   const [wellnessLogs, setWellnessLogs] = useState([]);
   const [rpeLogs, setRpeLogs] = useState([]);
   const [forceLogs, setForceLogs] = useState([]);
+  const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [tT, setTT] = useState(DEF_TT);
   const [dT, setDT] = useState(DEF_DT);
 
   // Load all data
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [pRes, cRes, eRes, iRes, wRes, rRes, fRes, sRes] = await Promise.all([
+    const [pRes, cRes, eRes, iRes, wRes, rRes, fRes, attRes, sRes] = await Promise.all([
       supabase.from("players").select("*").order("id"),
       supabase.from("coaches").select("*").order("created_at"),
       supabase.from("events").select("*").order("date"),
@@ -468,6 +525,7 @@ export default function App() {
       supabase.from("wellness_logs").select("*").gte("date", new Date(Date.now() - 28*86400000).toISOString().split("T")[0]),
       supabase.from("rpe_logs").select("*").gte("date", new Date(Date.now() - 28*86400000).toISOString().split("T")[0]),
       supabase.from("force_plate_logs").select("*").gte("date", new Date(Date.now() - 28*86400000).toISOString().split("T")[0]),
+      supabase.from("attendance_logs").select("*"),
       supabase.from("app_settings").select("*").eq("id", 1).single(),
     ]);
     if (pRes.data) setRoster(pRes.data);
@@ -477,6 +535,7 @@ export default function App() {
     if (wRes.data) setWellnessLogs(wRes.data);
     if (rRes.data) setRpeLogs(rRes.data);
     if (fRes.data) setForceLogs(fRes.data);
+    if (attRes.data) setAttendanceLogs(attRes.data);
     if (sRes.data) { setTT(sRes.data.training_types || DEF_TT); setDT(sRes.data.dry_types || DEF_DT); }
     setLoading(false);
   }, []);
@@ -515,13 +574,13 @@ export default function App() {
       <div style={{flex:1,overflow:"auto"}}>
         <div style={{padding:"11px 20px",borderBottom:"1px solid "+C.brd,display:"flex",justifyContent:"space-between",alignItems:"center",background:C.bg2,position:"sticky",top:0,zIndex:10}}>
           <div><h1 style={{fontSize:15,fontWeight:800,color:C.tx,margin:0}}>{view==="team"?"Dashboard":view==="player"?(selP?.name||""):view==="calendar"?(selEv?selEv.title:"Naptár"):view==="injury"?"Sérülések":view==="alerts"?"Riasztások":"Beállítások"}</h1><div style={{fontSize:10,color:C.txM}}>{new Date().toLocaleDateString("hu-HU",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div></div>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v5.0</span></div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v5.1</span></div>
         </div>
         <div style={{padding:"16px 20px",maxWidth:1300}}>
           {view==="team"&&<TeamDash players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
           {view==="player"&&selP&&<PlayerView player={selP} onBack={()=>setView("team")} injuries={injuries}/>}
           {view==="calendar"&&!selEv&&<Cal roster={roster} events={events} onRefresh={loadAll} tTypes={tT} dTypes={dT} coachId={auth.user.id} onOpenEvent={ev=>{setSelEv(ev)}}/>}
-          {view==="calendar"&&selEv&&<EvDetail event={selEv} roster={roster} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} onRefresh={loadAll} onBack={()=>setSelEv(null)} coachId={auth.user.id}/>}
+          {view==="calendar"&&selEv&&<EvDetail event={selEv} roster={roster} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} attendanceLogs={attendanceLogs} onRefresh={loadAll} onBack={()=>setSelEv(null)} coachId={auth.user.id} userRole={userRole}/>}
           {view==="injury"&&<InjMgmt roster={roster} injuries={injuries} onRefresh={loadAll} coachId={auth.user.id}/>}
           {view==="alerts"&&<Alrt players={players}/>}
           {view==="settings"&&<Sett roster={roster} coaches={coaches} onRefresh={loadAll} tT={tT} dT={dT} userRole={userRole}/>}
