@@ -8,7 +8,7 @@ import {
 import { supabase } from "./lib/supabase";
 
 // ════════════════════════════════════════════════════════
-// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v5.2
+// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v5.3
 // ════════════════════════════════════════════════════════
 // Supabase-integrated version — all data persists!
 
@@ -26,6 +26,18 @@ const DEF_LT=["U16 Bajnokság","Kupa","Edzőmeccs","Torna","Barátságos"];
 const IL=["Váll","Csípőflexor","Térd (MCL)","Boka","Ágyék","Comb","Agyrázkódás","Egyéb"];
 const IT=["Kontakt sérülés","Nem-kontakt","Túlterhelés","Agyrázkódás","Izomhúzódás"];
 const RTP=["Sérült","Rehab","Egyéni on-ice","Kontaktmentes","Teljes edzés","Meccsképes"];
+const FP_PARAMS=[
+  {k:"cmj_conc_impulse",l:"CMJ Conc. Impulse",u:"Ns/kg",cat:"CMJ"},
+  {k:"cmj_rsi_mod",l:"RSImod",u:"",cat:"CMJ"},
+  {k:"cmj_jump_height",l:"CMJ Jump Height",u:"cm",cat:"CMJ"},
+  {k:"cmj_time_to_takeoff",l:"CMJ Time to Takeoff",u:"s",cat:"CMJ"},
+  {k:"cmj_peak_power",l:"CMJ Peak Power",u:"W/kg",cat:"CMJ"},
+  {k:"cmj_peak_force",l:"CMJ Peak Force",u:"N/kg",cat:"CMJ"},
+  {k:"sj_jump_height",l:"SJ Jump Height",u:"cm",cat:"SJ"},
+  {k:"cmj_sj_diff",l:"CMJ–SJ Diff",u:"cm",cat:"Derived"},
+];
+// VALD Excel column name mapping (flexible matching)
+const VALD_MAP={"concentric impulse":"cmj_conc_impulse","conc impulse":"cmj_conc_impulse","conc. impulse":"cmj_conc_impulse","rsimod":"cmj_rsi_mod","rsi mod":"cmj_rsi_mod","rsi modified":"cmj_rsi_mod","cmj jump height":"cmj_jump_height","cmj height":"cmj_jump_height","jump height (cmj)":"cmj_jump_height","jump height":"cmj_jump_height","time to takeoff":"cmj_time_to_takeoff","time to take off":"cmj_time_to_takeoff","tto":"cmj_time_to_takeoff","cmj peak power":"cmj_peak_power","peak power":"cmj_peak_power","cmj peak force":"cmj_peak_force","peak force":"cmj_peak_force","sj jump height":"sj_jump_height","sj height":"sj_jump_height","jump height (sj)":"sj_jump_height","cmj-sj":"cmj_sj_diff","cmj sj diff":"cmj_sj_diff","cmj-sj diff":"cmj_sj_diff","height difference":"cmj_sj_diff"};
 const ATT_OPTS=[{v:"full",l:"✅ Teljes",c:"#10b981"},{v:"rehab",l:"🔄 Rehab",c:"#f59e0b"},{v:"absent",l:"❌ Hiányzik",c:"#ef4444"},{v:"sick",l:"🤒 Beteg",c:"#f97316"},{v:"injured",l:"🏥 Sérült",c:"#8b5cf6"},{v:"other",l:"📝 Egyéb",c:"#7f90b0"}];
 const _genPin=(digits=4)=>String(Math.floor(10**(digits-1)+Math.random()*(9*10**(digits-1)))).slice(0,digits);
 
@@ -303,7 +315,7 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
   const avgWs=todayW.filter(w=>localPids.includes(w.player_id)).length?Math.round(todayW.filter(w=>localPids.includes(w.player_id)).reduce((s,w)=>s+(w.wellness_score||0),0)/todayW.filter(w=>localPids.includes(w.player_id)).length):0;
 
   const submitRpe=async(pid)=>{setSaving(true);await supabase.from("rpe_logs").upsert({player_id:pid,event_id:ev.id,date:today,rpe:rpeVal,duration:ev.duration},{onConflict:"player_id,event_id"});setSaving(false);setRpeModal(null);setRpeVal(5);onRefresh()};
-  const submitFp=async(pid)=>{setSaving(true);await supabase.from("force_plate_logs").upsert({player_id:pid,date:today,jump_height:Number(fpJH)||null,peak_force:Number(fpPF)||null,asymmetry:Number(fpAS)||null},{onConflict:"player_id,date"});setSaving(false);setFpModal(null);setFpJH("");setFpPF("");setFpAS("");onRefresh()};
+  const submitFp=async(pid)=>{setSaving(true);const jh=Number(fpJH)||null;const pf=Number(fpPF)||null;const sjh=Number(fpAS)||null;const diff=jh&&sjh?Math.round((jh-sjh)*100)/100:null;await supabase.from("force_plate_logs").upsert({player_id:pid,date:today,jump_height:jh,peak_force:pf,asymmetry:diff?Math.abs(diff):null,cmj_jump_height:jh,cmj_peak_force:pf,sj_jump_height:sjh,cmj_sj_diff:diff},{onConflict:"player_id,date"});setSaving(false);setFpModal(null);setFpJH("");setFpPF("");setFpAS("");onRefresh()};
   const submitW=async(pid)=>{setSaving(true);const ws=(Object.values(wv).reduce((a,b)=>a+b,0)/30)*100;await supabase.from("wellness_logs").upsert({player_id:pid,date:today,...wv,wellness_score:Math.round(ws*10)/10},{onConflict:"player_id,date"});setSaving(false);setWModal(null);setWv(Object.fromEntries(WK.map(k=>[k,3])));onRefresh()};
   const rCol=v=>v<=3?C.g:v<=6?C.y:v<=8?C.o:C.r;
   const wsCol=v=>v>=80?C.g:v>=60?C.y:C.r;
@@ -373,11 +385,15 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
     </Modal>
 
     {/* Force Plate Modal */}
-    <Modal open={!!fpModal} onClose={()=>setFpModal(null)} title={fpModal?`⚡ Force Plate — ${fpModal.name}`:""} w={400}>
-      <Inp label="Jump Height (cm)" value={fpJH} onChange={setFpJH} type="number" ph="pl. 35.2"/>
-      <Inp label="Peak Force (N)" value={fpPF} onChange={setFpPF} type="number" ph="pl. 2200"/>
-      <Inp label="Aszimmetria (%)" value={fpAS} onChange={setFpAS} type="number" ph="pl. 8.5"/>
-      <Btn full onClick={()=>submitFp(fpModal.id)} disabled={saving}>{saving?"⏳":"💾"} Mentés</Btn>
+    <Modal open={!!fpModal} onClose={()=>setFpModal(null)} title={fpModal?`⚡ Force Plate — ${fpModal.name}`:""} w={520}>
+      <div style={{fontSize:11,color:C.txM,marginBottom:12}}>Dátum: {ev.date} · Vagy használd a ⚡ Force Plate menüpontot részletes bevitelhez</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0 10px"}}>
+        <Inp label="CMJ Jump Height (cm)" value={fpJH} onChange={setFpJH} type="number" ph="35.2"/>
+        <Inp label="CMJ Peak Force (N/kg)" value={fpPF} onChange={setFpPF} type="number" ph="22.5"/>
+        <Inp label="SJ Jump Height (cm)" value={fpAS} onChange={setFpAS} type="number" ph="30.1"/>
+      </div>
+      <Btn full onClick={()=>submitFp(fpModal.id)} disabled={saving}>{saving?"⏳":"💾"} Gyors mentés</Btn>
+      <p style={{fontSize:9,color:C.txD,marginTop:8,textAlign:"center"}}>Részletes CMJ/SJ adatbevitelhez használd a ⚡ Force Plate menüpontot</p>
     </Modal>
   </div>;
 };
@@ -505,6 +521,165 @@ const Alrt=({players})=>{
 };
 
 
+
+// ═══ FORCE PLATE DATA ENTRY ═══
+const FPEntry=({roster,onRefresh})=>{
+  const[tab,setTab]=useState("manual");const[saving,setSaving]=useState(false);
+  // Manual entry
+  const[mPlayer,setMPlayer]=useState("");const[mDate,setMDate]=useState(new Date().toISOString().split("T")[0]);
+  const[mVals,setMVals]=useState(Object.fromEntries(FP_PARAMS.map(p=>[p.k,""])));
+  // Import
+  const[importData,setImportData]=useState(null);const[importMsg,setImportMsg]=useState("");
+  // History view
+  const[histPlayer,setHistPlayer]=useState("");const[histData,setHistData]=useState([]);const[loadingHist,setLoadingHist]=useState(false);
+
+  const saveManual=async()=>{
+    if(!mPlayer||!mDate)return;setSaving(true);
+    const row={player_id:Number(mPlayer),date:mDate};
+    FP_PARAMS.forEach(p=>{if(mVals[p.k])row[p.k]=Number(mVals[p.k])});
+    // Auto-calc CMJ-SJ diff
+    if(row.cmj_jump_height&&row.sj_jump_height&&!row.cmj_sj_diff){row.cmj_sj_diff=Math.round((row.cmj_jump_height-row.sj_jump_height)*100)/100}
+    // Also fill legacy columns for readiness calc
+    if(row.cmj_jump_height)row.jump_height=row.cmj_jump_height;
+    if(row.cmj_peak_force)row.peak_force=row.cmj_peak_force;
+    if(row.cmj_sj_diff!==undefined)row.asymmetry=Math.abs(row.cmj_sj_diff);
+    await supabase.from("force_plate_logs").upsert(row,{onConflict:"player_id,date"});
+    setSaving(false);setMVals(Object.fromEntries(FP_PARAMS.map(p=>[p.k,""])));onRefresh();
+    alert("✅ Force plate adat mentve: "+roster.find(p=>p.id===Number(mPlayer))?.name+" ("+mDate+")");
+  };
+
+  const handleValdImport=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    setImportMsg("📂 Fájl feldolgozása...");
+    try{
+      const XLSX=await import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs");
+      const buf=await file.arrayBuffer();const wb=XLSX.read(buf);const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws);
+      if(!rows.length){setImportMsg("❌ Üres fájl");return}
+      // Detect columns
+      const headers=Object.keys(rows[0]);
+      const colMap={};
+      headers.forEach(h=>{
+        const hl=h.toLowerCase().trim();
+        // Check direct match in VALD_MAP
+        if(VALD_MAP[hl]){colMap[h]=VALD_MAP[hl];return}
+        // Partial match
+        for(const[pattern,field] of Object.entries(VALD_MAP)){if(hl.includes(pattern)){colMap[h]=field;return}}
+      });
+      // Find name and date columns
+      const nameCol=headers.find(h=>/name|név|player|játékos/i.test(h));
+      const dateCol=headers.find(h=>/date|dátum|datum|test date/i.test(h));
+      if(!nameCol){setImportMsg("❌ Nem találom a név oszlopot (Name/Név/Player)");return}
+      
+      const parsed=[];let matched=0;let unmatched=[];
+      for(const row of rows){
+        const name=(row[nameCol]||"").toString().trim();
+        const pl=roster.find(p=>p.active&&(p.name.toLowerCase()===name.toLowerCase()||p.name.toLowerCase().includes(name.toLowerCase())||name.toLowerCase().includes(p.name.split(" ").pop().toLowerCase())));
+        if(!pl){unmatched.push(name);continue}
+        const dateRaw=dateCol?row[dateCol]:null;
+        let date=mDate;
+        if(dateRaw){
+          if(typeof dateRaw==="number"){const d=new Date((dateRaw-25569)*86400000);date=d.toISOString().split("T")[0]}
+          else{const d=new Date(dateRaw);if(!isNaN(d))date=d.toISOString().split("T")[0]}
+        }
+        const entry={player_id:pl.id,player_name:pl.name,date};
+        for(const[origCol,fpKey] of Object.entries(colMap)){const v=Number(row[origCol]);if(!isNaN(v)&&v!==0)entry[fpKey]=Math.round(v*10000)/10000}
+        // Auto-calc
+        if(entry.cmj_jump_height&&entry.sj_jump_height&&!entry.cmj_sj_diff){entry.cmj_sj_diff=Math.round((entry.cmj_jump_height-entry.sj_jump_height)*100)/100}
+        if(entry.cmj_jump_height)entry.jump_height=entry.cmj_jump_height;
+        if(entry.cmj_peak_force)entry.peak_force=entry.cmj_peak_force;
+        parsed.push(entry);matched++;
+      }
+      setImportData(parsed);
+      const mappedKeys=Object.values(colMap).map(k=>FP_PARAMS.find(p=>p.k===k)?.l||k);
+      setImportMsg(`✅ ${matched} játékos felismerve · ${mappedKeys.length} paraméter: ${mappedKeys.join(", ")}${unmatched.length?"\n⚠️ Nem felismert: "+unmatched.join(", "):""}`);
+    }catch(err){setImportMsg("❌ Hiba: "+err.message)}
+    e.target.value="";
+  };
+
+  const confirmImport=async()=>{
+    if(!importData)return;setSaving(true);
+    for(const entry of importData){
+      const row={...entry};delete row.player_name;
+      await supabase.from("force_plate_logs").upsert(row,{onConflict:"player_id,date"});
+    }
+    setSaving(false);setImportData(null);setImportMsg("✅ "+importData.length+" rekord importálva!");onRefresh();
+  };
+
+  const loadHist=async(pid)=>{
+    setHistPlayer(pid);if(!pid)return;setLoadingHist(true);
+    const{data}=await supabase.from("force_plate_logs").select("*").eq("player_id",Number(pid)).order("date",{ascending:false}).limit(30);
+    setHistData(data||[]);setLoadingHist(false);
+  };
+
+  return<div>
+    <Sec sub="CMJ & SJ paraméterek, VALD import">⚡ Force Plate Adatbevitel</Sec>
+    <div style={{display:"flex",gap:3,marginBottom:16,background:C.bg2,padding:3,borderRadius:9}}>
+      {[{k:"manual",l:"✏️ Kézi bevitel"},{k:"import",l:"📁 VALD Import"},{k:"history",l:"📊 Előzmények"}].map(t=><button key={t.k} onClick={()=>setTab(t.k)} style={{flex:1,padding:"8px 12px",borderRadius:7,border:"none",background:tab===t.k?C.card:"transparent",color:tab===t.k?C.tx:C.txM,cursor:"pointer",fontSize:11,fontWeight:600}}>{t.l}</button>)}
+    </div>
+
+    {tab==="manual"&&<div style={{maxWidth:600}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}>
+        <Inp label="Játékos" value={mPlayer} onChange={setMPlayer} opts={[{v:"",l:"Válassz..."},...roster.filter(p=>p.active).map(p=>({v:String(p.id),l:p.name}))]}/>
+        <Inp label="Dátum" value={mDate} onChange={setMDate} type="date"/>
+      </div>
+      <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.b,marginBottom:10}}>📊 CMJ (Countermovement Jump)</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0 10px"}}>
+          {FP_PARAMS.filter(p=>p.cat==="CMJ").map(p=><Inp key={p.k} label={p.l+(p.u?" ("+p.u+")":"")} value={mVals[p.k]} onChange={v=>setMVals(x=>({...x,[p.k]:v}))} type="number" ph="0"/>)}
+        </div>
+      </div>
+      <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.o,marginBottom:10}}>🔶 SJ (Squat Jump)</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
+          {FP_PARAMS.filter(p=>p.cat==="SJ").map(p=><Inp key={p.k} label={p.l+(p.u?" ("+p.u+")":"")} value={mVals[p.k]} onChange={v=>setMVals(x=>({...x,[p.k]:v}))} type="number" ph="0"/>)}
+        </div>
+        {mVals.cmj_jump_height&&mVals.sj_jump_height&&<div style={{fontSize:11,color:C.g,marginTop:6}}>Auto CMJ–SJ diff: <strong>{(Number(mVals.cmj_jump_height)-Number(mVals.sj_jump_height)).toFixed(2)} cm</strong></div>}
+      </div>
+      <Btn full onClick={saveManual} disabled={saving||!mPlayer}>{saving?"⏳":"💾"} Mentés</Btn>
+    </div>}
+
+    {tab==="import"&&<div style={{maxWidth:700}}>
+      <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:20,marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.tx,marginBottom:8}}>📁 VALD ForceDecks Excel Import</div>
+        <p style={{fontSize:11,color:C.txM,marginBottom:12}}>Töltsd fel a VALD-ból exportált Excel fájlt. Az oszlopokat automatikusan felismeri a rendszer. Szükséges oszlopok: <strong>Name</strong> (játékos neve) + az alábbi paraméterek bármelyike.</p>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:12}}>{FP_PARAMS.map(p=><span key={p.k} style={{fontSize:9,padding:"2px 6px",borderRadius:4,background:p.cat==="CMJ"?C.bD:p.cat==="SJ"?C.oD:C.gD,color:p.cat==="CMJ"?C.b:p.cat==="SJ"?C.o:C.g,fontWeight:600}}>{p.l}</span>)}</div>
+        <p style={{fontSize:10,color:C.txD,marginBottom:12}}>Ha van <strong>Date/Dátum</strong> oszlop, automatikusan a megfelelő dátumra menti. Ha nincs, az alábbi dátumot használja:</p>
+        <Inp label="Alapértelmezett dátum (ha nincs az Excelben)" value={mDate} onChange={setMDate} type="date"/>
+        <label style={{display:"inline-flex",alignItems:"center",gap:6,padding:"10px 20px",borderRadius:10,background:C.pD,color:C.p,fontSize:12,fontWeight:700,cursor:"pointer",marginTop:8}}>📁 Excel fájl kiválasztása<input type="file" accept=".xlsx,.xls,.csv" onChange={handleValdImport} style={{display:"none"}}/></label>
+      </div>
+      {importMsg&&<div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:10,padding:14,marginBottom:14,whiteSpace:"pre-wrap"}}><div style={{fontSize:12,color:C.tx}}>{importMsg}</div></div>}
+      {importData&&<div>
+        <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,overflow:"hidden",marginBottom:14}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{borderBottom:"1px solid "+C.brd}}>
+            <th style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:C.txM}}>Játékos</th>
+            <th style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:C.txM}}>Dátum</th>
+            {FP_PARAMS.map(p=><th key={p.k} style={{padding:"8px 6px",textAlign:"right",fontSize:8,color:C.txM}}>{p.l.replace("CMJ ","").replace("SJ ","")}</th>)}
+          </tr></thead><tbody>{importData.slice(0,20).map((r,i)=><tr key={i} style={{borderBottom:"1px solid "+C.brd}}>
+            <td style={{padding:"6px 10px",fontSize:11,color:C.tx,fontWeight:600}}>{r.player_name}</td>
+            <td style={{padding:"6px 10px",fontSize:11,color:C.txM}}>{r.date}</td>
+            {FP_PARAMS.map(p=><td key={p.k} style={{padding:"6px 6px",textAlign:"right",fontSize:10,color:r[p.k]?C.a:C.txD}}>{r[p.k]||"—"}</td>)}
+          </tr>)}</tbody></table>
+        </div>
+        <div style={{display:"flex",gap:8}}><Btn full onClick={confirmImport} disabled={saving}>{saving?"⏳ Importálás...":"✅ "+importData.length+" rekord importálása"}</Btn><Btn v="secondary" onClick={()=>{setImportData(null);setImportMsg("")}}>Mégse</Btn></div>
+      </div>}
+    </div>}
+
+    {tab==="history"&&<div style={{maxWidth:700}}>
+      <Inp label="Játékos" value={histPlayer} onChange={v=>{setHistPlayer(v);loadHist(v)}} opts={[{v:"",l:"Válassz..."},...roster.filter(p=>p.active).map(p=>({v:String(p.id),l:p.name}))]}/>
+      {loadingHist&&<Spinner/>}
+      {histPlayer&&!loadingHist&&(histData.length===0?<p style={{color:C.txD,textAlign:"center",padding:30}}>Nincs force plate adat</p>
+      :<div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,overflow:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:700}}><thead><tr style={{borderBottom:"1px solid "+C.brd}}>
+        <th style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:C.txM,position:"sticky",left:0,background:C.card}}>Dátum</th>
+        {FP_PARAMS.map(p=><th key={p.k} style={{padding:"8px 6px",textAlign:"right",fontSize:9,color:C.txM,whiteSpace:"nowrap"}}>{p.l.replace("CMJ ","").replace("SJ ","")}{p.u?" ("+p.u+")":""}</th>)}
+      </tr></thead><tbody>{histData.map(r=><tr key={r.id} style={{borderBottom:"1px solid "+C.brd}}>
+        <td style={{padding:"6px 10px",fontSize:11,color:C.tx,fontWeight:600,position:"sticky",left:0,background:C.card}}>{r.date}</td>
+        {FP_PARAMS.map(p=><td key={p.k} style={{padding:"6px 6px",textAlign:"right",fontSize:11,color:r[p.k]?C.a:C.txD,fontWeight:r[p.k]?600:400}}>{r[p.k]!==null&&r[p.k]!==undefined?Number(r[p.k]).toFixed(p.u==="s"||p.u===""?4:2):"—"}</td>)}
+      </tr>)}</tbody></table></div>)}
+    </div>}
+  </div>;
+};
+
 // ═══ TRAINING LIST VIEW ═══
 const TrainList=({events,onOpenEvent})=>{
   const[filter,setFilter]=useState("ALL");const[dateF,setDateF]=useState("");
@@ -627,7 +802,7 @@ export default function App() {
 
   const userRole = auth.user.role;
   const matchCount=events.filter(e=>e.type==="match").length;
-  const nav = [{k:"team",l:"Dashboard",i:"👥"},{k:"roster",l:"Keret",i:"🏒"},{k:"calendar",l:"Naptár",i:"📅"},{k:"trainings",l:"Edzések",i:"📋"},{k:"matches",l:"Meccsek",i:"🆚",badge:matchCount},{k:"injury",l:"Sérülések",i:"🏥",badge:actI},{k:"alerts",l:"Riasztások",i:"🔔",badge:alC},{k:"settings",l:"Beállítások",i:"⚙️"}];
+  const nav = [{k:"team",l:"Dashboard",i:"👥"},{k:"roster",l:"Keret",i:"🏒"},{k:"calendar",l:"Naptár",i:"📅"},{k:"trainings",l:"Edzések",i:"📋"},{k:"matches",l:"Meccsek",i:"🆚",badge:matchCount},{k:"forceplate",l:"Force Plate",i:"⚡"},{k:"injury",l:"Sérülések",i:"🏥",badge:actI},{k:"alerts",l:"Riasztások",i:"🔔",badge:alC},{k:"settings",l:"Beállítások",i:"⚙️"}];
 
   return (
     <div style={{display:"flex",height:"100vh",background:C.bg,overflow:"hidden",fontFamily:"'Inter',-apple-system,sans-serif"}}>
@@ -645,8 +820,8 @@ export default function App() {
       </div>
       <div style={{flex:1,overflow:"auto"}}>
         <div style={{padding:"11px 20px",borderBottom:"1px solid "+C.brd,display:"flex",justifyContent:"space-between",alignItems:"center",background:C.bg2,position:"sticky",top:0,zIndex:10}}>
-          <div><h1 style={{fontSize:15,fontWeight:800,color:C.tx,margin:0}}>{view==="team"?"Dashboard":view==="player"?(selP?.name||""):view==="calendar"?(selEv?selEv.title:"Naptár"):view==="roster"?"Keret":view==="trainings"?"Edzések":view==="matches"?"Mérkőzések":view==="injury"?"Sérülések":view==="alerts"?"Riasztások":view==="settings"?"Beállítások":"..."}</h1><div style={{fontSize:10,color:C.txM}}>{new Date().toLocaleDateString("hu-HU",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div></div>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v5.2</span></div>
+          <div><h1 style={{fontSize:15,fontWeight:800,color:C.tx,margin:0}}>{view==="team"?"Dashboard":view==="player"?(selP?.name||""):view==="calendar"?(selEv?selEv.title:"Naptár"):view==="forceplate"?"Force Plate":view==="roster"?"Keret":view==="trainings"?"Edzések":view==="matches"?"Mérkőzések":view==="injury"?"Sérülések":view==="alerts"?"Riasztások":view==="settings"?"Beállítások":"..."}</h1><div style={{fontSize:10,color:C.txM}}>{new Date().toLocaleDateString("hu-HU",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div></div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v5.3</span></div>
         </div>
         <div style={{padding:"16px 20px",maxWidth:1300}}>
           {view==="team"&&<TeamDash players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
@@ -654,6 +829,7 @@ export default function App() {
           {view==="calendar"&&!selEv&&<Cal roster={roster} events={events} onRefresh={loadAll} tTypes={tT} dTypes={dT} coachId={auth.user.id} onOpenEvent={ev=>{setSelEv(ev)}} lTypes={lT}/>}
           {view==="calendar"&&selEv&&<EvDetail event={selEv} roster={roster} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} attendanceLogs={attendanceLogs} onRefresh={loadAll} onBack={()=>setSelEv(null)} coachId={auth.user.id} userRole={userRole}/>}
           {view==="injury"&&<InjMgmt roster={roster} injuries={injuries} onRefresh={loadAll} coachId={auth.user.id}/>}
+          {view==="forceplate"&&<FPEntry roster={roster} onRefresh={loadAll}/>}
           {view==="roster"&&<RosterView players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
           {view==="trainings"&&!selEv&&<TrainList events={events.filter(e=>e.type!=="match")} onOpenEvent={ev=>{setSelEv(ev);setView("calendar")}}/>}
           {view==="matches"&&!selEv&&<MatchView events={events} onOpenEvent={ev=>{setSelEv(ev);setView("calendar")}}/>}
