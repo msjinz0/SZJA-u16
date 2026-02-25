@@ -8,7 +8,7 @@ import {
 import { supabase } from "./lib/supabase";
 
 // ════════════════════════════════════════════════════════
-// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v5.1
+// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v5.2
 // ════════════════════════════════════════════════════════
 // Supabase-integrated version — all data persists!
 
@@ -19,8 +19,10 @@ const POS_L={C:"Center",LW:"Bal szélső",RW:"Jobb szélső",LD:"Bal védő",RD:
 const calcAge=bd=>{if(!bd)return null;const d=new Date(),b=new Date(bd);let a=d.getFullYear()-b.getFullYear();if(d.getMonth()<b.getMonth()||(d.getMonth()===b.getMonth()&&d.getDate()<b.getDate()))a--;return a};
 const WK=["sleep_quality","sleep_duration","soreness","fatigue","stress","mood"];
 const WL=["Alvásminőség","Alvásidő","Izomláz","Fáradtság","Stressz","Hangulat"];
+const WL_DESC=["1=nagyon rossz, 5=kiváló","1=nagyon kevés, 5=tökéletes","1=nagyon erős, 5=nincs izomláz","1=nagyon fáradt, 5=pihent","1=nagyon stresszes, 5=nyugodt","1=nagyon rossz, 5=kiváló"];
 const DEF_TT=["Taktikai","Technikai","Power skating","Lövőedzés","Játékforma","Kapusedzés"];
 const DEF_DT=["Erő","Kondíció","Kardió","Core/Stabilitás","Mobilitás","Sprint"];
+const DEF_LT=["U16 Bajnokság","Kupa","Edzőmeccs","Torna","Barátságos"];
 const IL=["Váll","Csípőflexor","Térd (MCL)","Boka","Ágyék","Comb","Agyrázkódás","Egyéb"];
 const IT=["Kontakt sérülés","Nem-kontakt","Túlterhelés","Agyrázkódás","Izomhúzódás"];
 const RTP=["Sérült","Rehab","Egyéni on-ice","Kontaktmentes","Teljes edzés","Meccsképes"];
@@ -44,10 +46,12 @@ function computeMetrics(player, wellnessLogs, rpeLogs, forceLogs) {
     const fDay = fl.find(f => f.date === ds);
     const wv = wDay ? WK.map(k => wDay[k] || 3) : [3,3,3,3,3,3];
     const ws = (wv.reduce((a,b) => a+b, 0) / 30) * 100;
-    const dayLoad = rDay.reduce((s, r) => s + (r.load || r.rpe * r.duration), 0) || Math.round(200 + Math.random() * 300);
-    const jh = fDay ? Number(fDay.jump_height) : 30 + Math.random() * 8;
-    const pf = fDay ? Number(fDay.peak_force) : 2000 + Math.random() * 500;
-    const as = fDay ? Number(fDay.asymmetry) : Math.random() * 15;
+    const dayLoad = rDay.reduce((s, r) => s + (r.load || r.rpe * (r.duration||90)), 0);
+    // Force plate: use last known value (weekly protocol)
+    const lastFp = fl.filter(f => f.date <= ds).slice(-1)[0];
+    const jh = fDay ? Number(fDay.jump_height) : lastFp ? Number(lastFp.jump_height) : null;
+    const pf = fDay ? Number(fDay.peak_force) : lastFp ? Number(lastFp.peak_force) : null;
+    const as = fDay ? Number(fDay.asymmetry) : lastFp ? Number(lastFp.asymmetry) : null;
     days.push({ date: ds, dl, wv, ws: Math.round(ws*10)/10, load: dayLoad, jh: Math.round(jh*10)/10, pf: Math.round(pf), as: Math.round(as*10)/10 });
   }
 
@@ -57,15 +61,22 @@ function computeMetrics(player, wellnessLogs, rpeLogs, forceLogs) {
   const ac = days.slice(-7).reduce((s,d) => s+d.load, 0);
   const ch = days.reduce((s,d) => s+d.load, 0) / 4;
   const acwr = ch > 0 ? Math.round(ac/ch*100)/100 : 0;
-  const jm = avg(days.map(d => d.jh));
-  const fm = avg(days.map(d => d.pf));
-  const wm = avg(days.map(d => d.ws));
-  const wsd = sdd(days.map(d => d.ws));
-  const wz = wsd > 0 ? (cur.ws - wm) / wsd : 0;
-  const jd = jm > 0 ? ((cur.jh - jm) / jm) * 100 : 0;
-  const fd = fm > 0 ? ((cur.pf - fm) / fm) * 100 : 0;
+  const jhDays = days.filter(d => d.jh !== null);
+  const pfDays = days.filter(d => d.pf !== null);
+  const jm = avg(jhDays.map(d => d.jh));
+  const fm = avg(pfDays.map(d => d.pf));
+  const wDays = days.filter(d => d.ws > 0);
+  const wm = avg(wDays.map(d => d.ws));
+  const wsd = sdd(wDays.map(d => d.ws));
+  const wz = wsd > 0 ? ((cur.ws||0) - wm) / wsd : 0;
+  const hasFP = cur.jh !== null;
+  const jd = (jm > 0 && cur.jh !== null) ? ((cur.jh - jm) / jm) * 100 : 0;
+  const fd = (fm > 0 && cur.pf !== null) ? ((cur.pf - fm) / fm) * 100 : 0;
   const nm = (v,a,b) => Math.max(0, Math.min(1, (v-a)/(b-a)));
-  const rd = Math.round((nm(wz,-2,2)*.3 + Math.max(0,Math.min(1,1-Math.abs(acwr-1.1)))*.25 + nm(jd,-10,10)*.2 + nm(fd,-10,10)*.15 + (1-nm(cur.as,0,25))*.1)*100)/100;
+  // Readiness: if no FP data, base only on wellness(50%) + ACWR(50%)
+  const rd = hasFP
+    ? Math.round((nm(wz,-2,2)*.3 + Math.max(0,Math.min(1,1-Math.abs(acwr-1.1)))*.25 + nm(jd,-10,10)*.2 + nm(fd,-10,10)*.15 + (1-nm(cur.as||0,0,25))*.1)*100)/100
+    : wDays.length>0 ? Math.round((nm(wz,-2,2)*.5 + Math.max(0,Math.min(1,1-Math.abs(acwr-1.1)))*.5)*100)/100 : 0.5;
   const st = rd >= .75 ? "GREEN" : rd >= .5 ? "YELLOW" : "RED";
   const al = [];
   if (acwr > 1.5) al.push({t:"d",m:"ACWR > 1.5"});
@@ -76,9 +87,8 @@ function computeMetrics(player, wellnessLogs, rpeLogs, forceLogs) {
   return {
     ...player, days, ac, ch: Math.round(ch), acwr, jm: Math.round(jm*10)/10, fm: Math.round(fm),
     jd: Math.round(jd*10)/10, fd: Math.round(fd*10)/10, as: cur.as, rd, st, al, cur,
-    grip: Math.round(30 + player.weight * 0.4), shot: Math.round(50 + player.weight * 0.5),
-    sp30: Math.round((4.5 - player.height * 0.002) * 100) / 100,
-    tests: [{t:"Shot speed",v:Math.round(50+player.weight*.5)+" km/h"},{t:"Grip",v:Math.round(30+player.weight*.4)+" kg"},{t:"Sprint 30m",v:Math.round((4.5-player.height*.002)*100)/100+"s"},{t:"Jump",v:cur.jh+"cm"},{t:"Asym",v:cur.as.toFixed(1)+"%"}],
+    hasFP,
+    tests: [{t:"Jump",v:cur.jh!==null?cur.jh+"cm":"—"},{t:"Peak Force",v:cur.pf!==null?cur.pf+"N":"—"},{t:"Asym",v:cur.as!==null?cur.as.toFixed(1)+"%":"—"}],
   };
 }
 
@@ -152,7 +162,7 @@ const PRPE=({player,events,onLogout,onRefresh})=>{
     {step==="wellness"&&<div>
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:14,marginBottom:14}}>
         <div style={{fontSize:13,fontWeight:700,color:C.tx,marginBottom:10}}>💚 Wellness <span style={{color:C.a}}>{ws}%</span></div>
-        {WL.map((l,i)=><div key={i} style={{marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span style={{fontSize:11,color:C.txM}}>{l}</span><span style={{fontSize:11,fontWeight:700,color:C.a}}>{wv[WK[i]]}/5</span></div><div style={{display:"flex",gap:3}}>{[1,2,3,4,5].map(v=><button key={v} onClick={()=>setWv(p=>({...p,[WK[i]]:v}))} style={{flex:1,height:30,borderRadius:6,border:"none",background:wv[WK[i]]>=v?(v<=2?C.rD:v<=3?C.yD:C.gD):C.bg2,color:wv[WK[i]]>=v?(v<=2?C.r:v<=3?C.y:C.g):C.txD,cursor:"pointer",fontWeight:700,fontSize:11}}>{v}</button>)}</div></div>)}
+        {WL.map((l,i)=><div key={i} style={{marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:11,color:C.txM}}>{l}</span><span style={{fontSize:11,fontWeight:700,color:C.a}}>{wv[WK[i]]}/5</span></div><div style={{fontSize:9,color:C.txD,marginBottom:3}}>{WL_DESC[i]}</div><div style={{display:"flex",gap:3}}>{[1,2,3,4,5].map(v=><button key={v} onClick={()=>setWv(p=>({...p,[WK[i]]:v}))} style={{flex:1,height:30,borderRadius:6,border:"none",background:wv[WK[i]]>=v?(v<=2?C.rD:v<=3?C.yD:C.gD):C.bg2,color:wv[WK[i]]>=v?(v<=2?C.r:v<=3?C.y:C.g):C.txD,cursor:"pointer",fontWeight:700,fontSize:11}}>{v}</button>)}</div></div>)}
       </div>
       <Btn full sz="lg" onClick={saveWellness} disabled={saving}>{saving?"⏳":"💾"} Wellness mentése</Btn>
       {wellnessSaved&&todayEvs.length>0&&<Btn full v="blue" sz="md" onClick={()=>setStep("events")} style={{marginTop:8}}>📝 Tovább az RPE-hez →</Btn>}
@@ -163,7 +173,7 @@ const PRPE=({player,events,onLogout,onRefresh})=>{
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:14,marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,fontWeight:700,color:C.tx}}>📝 Mai edzések RPE</span><span style={{fontSize:11,color:C.a,fontWeight:700}}>{Object.keys(doneEvs).length}/{todayEvs.length} kitöltve</span></div>
         {todayEvs.map(ev=>{const d=doneEvs[ev.id];return<div key={ev.id} onClick={()=>{if(!d){setRpe(5);setRpeSelEv(ev)}}} style={{background:d?C.gD:C.bg2,border:"1px solid "+(d?C.g+"40":C.brd),borderRadius:10,padding:14,marginBottom:6,cursor:d?"default":"pointer"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{ev.type==="match"?"🏒":"⛸️"} {ev.title}</span><div style={{fontSize:11,color:C.txM,marginTop:2}}>{ev.time} · {ev.duration}p · {ev.subtype||ev.opponent||""}</div></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{ev.type==="match"?"🆚":"🏒""} {ev.title}</span><div style={{fontSize:11,color:C.txM,marginTop:2}}>{ev.time} · {ev.duration}p · {ev.subtype||ev.opponent||""}</div></div>
           {d?<div style={{textAlign:"center"}}><div style={{fontSize:20,fontWeight:900,color:rCol(d)}}>{d}/10</div><div style={{fontSize:9,color:C.b}}>{d*ev.duration} AU</div></div>:<span style={{fontSize:11,color:C.a,fontWeight:700}}>Kitöltés →</span>}
           </div>
         </div>})}
@@ -246,7 +256,7 @@ const PlayerView=({player:p,onBack,injuries})=>{
 };
 
 // ═══ CALENDAR ═══
-const Cal=({roster,events,onRefresh,tTypes,dTypes,coachId,onOpenEvent})=>{
+const Cal=({roster,events,onRefresh,tTypes,dTypes,coachId,onOpenEvent,lTypes})=>{
   const[mo,setMo]=useState(new Date());const[sel,setSel]=useState(null);const[modal,setModal]=useState(null);const[saving,setSaving]=useState(false);
   const[fT,setFT]=useState("");const[fTi,setFTi]=useState("16:30");const[fD,setFD]=useState("90");const[fS,setFS]=useState("");const[fO,setFO]=useState("");const[fL,setFL]=useState("SZJA Jégcsarnok");
   const y=mo.getFullYear(),m=mo.getMonth(),today=new Date().toISOString().split("T")[0];
@@ -264,7 +274,7 @@ const Cal=({roster,events,onRefresh,tTypes,dTypes,coachId,onOpenEvent})=>{
     <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,overflow:"auto"}}>
       {sel?<div><div style={{fontSize:13,fontWeight:700,color:C.tx,marginBottom:4}}>{sel}</div><div style={{display:"flex",gap:5,marginBottom:14,flexWrap:"wrap"}}><Btn sz="sm" v="blue" onClick={()=>openN("training")}>+ Jég</Btn><Btn sz="sm" v="orange" onClick={()=>openN("dry")}>+ Száraz</Btn><Btn sz="sm" v="green" onClick={()=>openN("match")}>+ Meccs</Btn></div>{dEvs.length===0?<p style={{color:C.txD,textAlign:"center",padding:20}}>Nincs esemény</p>:dEvs.map(ev=><div key={ev.id} style={{background:C.bg2,borderRadius:9,padding:12,marginBottom:6,borderLeft:"3px solid "+eC(ev.type),cursor:"pointer"}} onClick={()=>onOpenEvent&&onOpenEvent(ev)}><div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,fontWeight:700,color:C.tx}}>{ev.title}</span><span style={{fontSize:10,color:C.txM}}>{ev.time}</span></div><div style={{fontSize:10,color:C.txM,marginTop:3}}>{ev.duration}p · {ev.subtype||ev.opponent||""}</div><div style={{display:"flex",gap:4,marginTop:6}}><Btn sz="sm" v="blue" onClick={e=>{e.stopPropagation();onOpenEvent&&onOpenEvent(ev)}} style={{padding:"2px 6px",fontSize:9}}>📋 Részletek</Btn><Btn sz="sm" v="danger" onClick={e=>{e.stopPropagation();delEv(ev.id)}} style={{padding:"2px 6px",fontSize:9}}>🗑</Btn></div></div>)}</div>:<p style={{color:C.txD,textAlign:"center",padding:50}}>Válassz napot</p>}
     </div>
-    <Modal open={!!modal} onClose={()=>setModal(null)} title={modal==="training"?"⛸️ Jégedzés":modal==="dry"?"💪 Száraz":"🏒 Meccs"}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}><Inp label="Név" value={fT} onChange={setFT}/><Inp label="Idő" value={fTi} onChange={setFTi} type="time"/><Inp label="Perc" value={fD} onChange={setFD} type="number"/><Inp label="Típus" value={fS} onChange={setFS} opts={modal==="training"?tTypes:modal==="dry"?dTypes:["Bajnoki","Edzőmeccs","Kupa"]}/>{modal==="match"&&<Inp label="Ellenfél" value={fO} onChange={setFO}/>}<Inp label="Helyszín" value={fL} onChange={setFL}/></div><div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><Btn v="secondary" onClick={()=>setModal(null)}>Mégse</Btn><Btn onClick={save} disabled={saving||!fT}>{saving?"⏳":"💾"} Mentés</Btn></div></Modal>
+    <Modal open={!!modal} onClose={()=>setModal(null)} title={modal==="training"?"🏒 Jégedzés":modal==="dry"?"💪 Száraz":"🏒 Meccs"}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}><Inp label="Név" value={fT} onChange={setFT}/><Inp label="Idő" value={fTi} onChange={setFTi} type="time"/><Inp label="Perc" value={fD} onChange={setFD} type="number"/><Inp label="Típus" value={fS} onChange={setFS} opts={modal==="training"?tTypes:modal==="dry"?dTypes:(lTypes||DEF_LT)}/>{modal==="match"&&<Inp label="Ellenfél" value={fO} onChange={setFO}/>}<Inp label="Helyszín" value={fL} onChange={setFL}/></div><div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><Btn v="secondary" onClick={()=>setModal(null)}>Mégse</Btn><Btn onClick={save} disabled={saving||!fT}>{saving?"⏳":"💾"} Mentés</Btn></div></Modal>
   </div>;
 };
 
@@ -357,7 +367,7 @@ const EvDetail=({event:ev,roster,wellnessLogs,rpeLogs,attendanceLogs,onRefresh,o
 
     {/* Wellness Modal */}
     <Modal open={!!wModal} onClose={()=>setWModal(null)} title={wModal?`💚 Wellness — ${wModal.name}`:""} w={440}>
-      {WL.map((l,i)=><div key={i} style={{marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span style={{fontSize:11,color:C.txM}}>{l}</span><span style={{fontSize:11,fontWeight:700,color:C.a}}>{wv[WK[i]]}/5</span></div><div style={{display:"flex",gap:3}}>{[1,2,3,4,5].map(v=><button key={v} onClick={()=>setWv(p=>({...p,[WK[i]]:v}))} style={{flex:1,height:28,borderRadius:6,border:"none",background:wv[WK[i]]>=v?(v<=2?C.rD:v<=3?C.yD:C.gD):C.bg2,color:wv[WK[i]]>=v?(v<=2?C.r:v<=3?C.y:C.g):C.txD,cursor:"pointer",fontWeight:700,fontSize:11}}>{v}</button>)}</div></div>)}
+      {WL.map((l,i)=><div key={i} style={{marginBottom:8}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:11,color:C.txM}}>{l}</span><span style={{fontSize:11,fontWeight:700,color:C.a}}>{wv[WK[i]]}/5</span></div><div style={{fontSize:9,color:C.txD,marginBottom:2}}>{WL_DESC[i]}</div><div style={{display:"flex",gap:3}}>{[1,2,3,4,5].map(v=><button key={v} onClick={()=>setWv(p=>({...p,[WK[i]]:v}))} style={{flex:1,height:28,borderRadius:6,border:"none",background:wv[WK[i]]>=v?(v<=2?C.rD:v<=3?C.yD:C.gD):C.bg2,color:wv[WK[i]]>=v?(v<=2?C.r:v<=3?C.y:C.g):C.txD,cursor:"pointer",fontWeight:700,fontSize:11}}>{v}</button>)}</div></div>)}
       <div style={{fontSize:12,fontWeight:700,color:C.a,textAlign:"center",margin:"12px 0"}}>Összesített: {((Object.values(wv).reduce((a,b)=>a+b,0)/30)*100).toFixed(0)}%</div>
       <Btn full onClick={()=>submitW(wModal.id)} disabled={saving}>{saving?"⏳":"💾"} Wellness mentése</Btn>
     </Modal>
@@ -399,11 +409,11 @@ const InjMgmt=({roster,injuries,onRefresh,coachId})=>{
 };
 
 // ═══ SETTINGS (Players + Coaches + Types) ═══
-const Sett=({roster,coaches,onRefresh,tT,dT,userRole})=>{
+const Sett=({roster,coaches,onRefresh,tT,dT,lT,userRole})=>{
   const[pTab,setPTab]=useState("players");
   const[pModal,setPModal]=useState(null);const[fName,setFName]=useState("");const[fPos,setFPos]=useState("C");const[fAge,setFAge]=useState("15");const[fHt,setFHt]=useState("175");const[fWt,setFWt]=useState("68");const[fBd,setFBd]=useState("");
   const[cModal,setCModal]=useState(null);const[cName,setCName]=useState("");const[cRole,setCRole]=useState("COACH");const[cPin,setCPin]=useState("");
-  const[nT,setNT]=useState("");const[nD,setND]=useState("");
+  const[nT,setNT]=useState("");const[nD,setND]=useState("");const[nL,setNL]=useState("");
 
   const openEditP=p=>{setFName(p.name);setFPos(p.pos);setFAge(String(p.age));setFHt(String(p.height));setFWt(String(p.weight));setFBd(p.birth_date||"");setPModal(p)};
   const openNewP=()=>{setFName("");setFPos("C");setFAge("15");setFHt("175");setFWt("68");setFBd("");setPModal("new")};
@@ -432,7 +442,7 @@ const Sett=({roster,coaches,onRefresh,tT,dT,userRole})=>{
   return<div style={{maxWidth:750}}>
     <Sec sub="Keret, edzők, típusok">⚙️ Beállítások</Sec>
     <div style={{display:"flex",gap:3,marginBottom:16,background:C.bg2,padding:3,borderRadius:9}}>
-      {[{k:"players",l:"👥 Játékosok ("+actP+")"},{k:"types",l:"⛸️ Típusok"},...(isAdmin?[{k:"coaches",l:"🏒 Edzők"}]:[])].map(t=><button key={t.k} onClick={()=>setPTab(t.k)} style={{flex:1,padding:"8px 12px",borderRadius:7,border:"none",background:pTab===t.k?C.card:"transparent",color:pTab===t.k?C.tx:C.txM,cursor:"pointer",fontSize:11,fontWeight:600}}>{t.l}</button>)}
+      {[{k:"players",l:"👥 Játékosok ("+actP+")"},{k:"types",l:"🏒 Típusok"},...(isAdmin?[{k:"coaches",l:"🏒 Edzők"}]:[])].map(t=><button key={t.k} onClick={()=>setPTab(t.k)} style={{flex:1,padding:"8px 12px",borderRadius:7,border:"none",background:pTab===t.k?C.card:"transparent",color:pTab===t.k?C.tx:C.txM,cursor:"pointer",fontSize:11,fontWeight:600}}>{t.l}</button>)}
     </div>
 
     {pTab==="players"&&isHead&&<div>
@@ -451,8 +461,9 @@ const Sett=({roster,coaches,onRefresh,tT,dT,userRole})=>{
     {pTab==="players"&&!isHead&&<p style={{color:C.txM,textAlign:"center",padding:30}}>Nincs jogosultságod a keret kezeléséhez.</p>}
 
     {pTab==="types"&&<div>
-      <TL items={tT} field="training_types" nv={nT} setNv={setNT} color={C.b} label="⛸️ Jégedzés típusok"/>
+      <TL items={tT} field="training_types" nv={nT} setNv={setNT} color={C.b} label="🏒 Jégedzés típusok"/>
       <TL items={dT} field="dry_types" nv={nD} setNv={setND} color={C.o} label="💪 Szárazedzés típusok"/>
+      <TL items={lT||DEF_LT} field="league_types" nv={nL} setNv={setNL} color={C.g} label="🏆 Bajnokság/Meccs típusok"/>
     </div>}
 
     {pTab==="coaches"&&isAdmin&&<div>
@@ -493,6 +504,65 @@ const Alrt=({players})=>{
   </div>;
 };
 
+
+// ═══ TRAINING LIST VIEW ═══
+const TrainList=({events,onOpenEvent})=>{
+  const[filter,setFilter]=useState("ALL");const[dateF,setDateF]=useState("");
+  const filtered=useMemo(()=>{let f=events;if(filter!=="ALL")f=f.filter(e=>e.type===filter);if(dateF)f=f.filter(e=>e.date===dateF);return f.sort((a,b)=>b.date.localeCompare(a.date))},[events,filter,dateF]);
+  const eC=t=>t==="match"?C.g:t==="training"?C.b:C.o;
+  const eI=t=>t==="match"?"🆚":t==="training"?"🏒":"💪";
+  const eL=t=>t==="match"?"Meccs":t==="training"?"Jégedzés":"Szárazedzés";
+  return<div>
+    <Sec sub={filtered.length+" esemény"}>📋 Edzések</Sec>
+    <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+      {[{v:"ALL",l:"Mind"},{v:"training",l:"🏒 Jég"},{v:"dry",l:"💪 Száraz"}].map(f=><Btn key={f.v} sz="sm" v={filter===f.v?"primary":"secondary"} onClick={()=>setFilter(f.v)}>{f.l}</Btn>)}
+      <input type="date" value={dateF} onChange={e=>setDateF(e.target.value)} style={{padding:"5px 10px",borderRadius:8,background:C.bg2,border:"1px solid "+C.brd,color:C.tx,fontSize:11,outline:"none"}}/>
+      {dateF&&<Btn sz="sm" v="ghost" onClick={()=>setDateF("")}>✕</Btn>}
+    </div>
+    {filtered.length===0?<p style={{color:C.txD,textAlign:"center",padding:40}}>Nincs találat</p>
+    :filtered.map(ev=><div key={ev.id} onClick={()=>onOpenEvent(ev)} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:10,padding:14,marginBottom:6,cursor:"pointer",borderLeft:"3px solid "+eC(ev.type)}} onMouseEnter={e=>e.currentTarget.style.background=C.cardH} onMouseLeave={e=>e.currentTarget.style.background=C.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div><span style={{fontSize:13,fontWeight:700,color:C.tx}}>{eI(ev.type)} {ev.title}</span><div style={{fontSize:11,color:C.txM,marginTop:2}}>{ev.date} · {ev.time} · {ev.duration}p</div></div>
+        <div style={{textAlign:"right"}}><span style={{fontSize:10,padding:"2px 8px",borderRadius:5,background:eC(ev.type)+"15",color:eC(ev.type),fontWeight:700}}>{eL(ev.type)}</span>{ev.subtype&&<div style={{fontSize:10,color:C.txD,marginTop:2}}>{ev.subtype}</div>}</div>
+      </div>
+    </div>)}
+  </div>;
+};
+
+// ═══ MATCH VIEW ═══
+const MatchView=({events,onOpenEvent})=>{
+  const matches=useMemo(()=>events.filter(e=>e.type==="match").sort((a,b)=>b.date.localeCompare(a.date)),[events]);
+  return<div>
+    <Sec sub={matches.length+" mérkőzés"}>🆚 Mérkőzések</Sec>
+    {matches.length===0?<p style={{color:C.txD,textAlign:"center",padding:40}}>Nincs rögzített mérkőzés</p>
+    :matches.map(ev=><div key={ev.id} onClick={()=>onOpenEvent(ev)} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,marginBottom:8,cursor:"pointer",borderLeft:"3px solid "+C.g}} onMouseEnter={e=>e.currentTarget.style.background=C.cardH} onMouseLeave={e=>e.currentTarget.style.background=C.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div><div style={{fontSize:15,fontWeight:800,color:C.tx}}>🆚 {ev.opponent||ev.title}</div><div style={{fontSize:11,color:C.txM,marginTop:3}}>{ev.date} · {ev.time} · {ev.duration}p</div></div>
+        <div style={{textAlign:"right"}}>{ev.subtype&&<span style={{fontSize:10,padding:"3px 10px",borderRadius:6,background:C.gD,color:C.g,fontWeight:700}}>{ev.subtype}</span>}{ev.location&&<div style={{fontSize:10,color:C.txD,marginTop:3}}>📍 {ev.location}</div>}</div>
+      </div>
+    </div>)}
+  </div>;
+};
+
+// ═══ ROSTER VIEW (player list with links to profiles) ═══
+const RosterView=({players,onSelect})=>{
+  const[posF,setPosF]=useState("ALL");
+  const filtered=posF==="ALL"?players:players.filter(p=>p.pos===posF);
+  return<div>
+    <Sec sub={filtered.length+" aktív játékos"}>👥 Keret</Sec>
+    <div style={{display:"flex",gap:4,marginBottom:14}}>{["ALL",...POSITIONS].map(p=><Btn key={p} sz="sm" v={posF===p?"primary":"secondary"} onClick={()=>setPosF(p)}>{p==="ALL"?"Mind":p}</Btn>)}</div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+      {filtered.map(p=><div key={p.id} onClick={()=>onSelect(p)} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,cursor:"pointer",textAlign:"center"}} onMouseEnter={e=>e.currentTarget.style.background=C.cardH} onMouseLeave={e=>e.currentTarget.style.background=C.card}>
+        <div style={{width:40,height:40,borderRadius:"50%",background:`linear-gradient(135deg,${C.a}40,${C.b}40)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:C.a,margin:"0 auto 8px"}}>{p.name.split(" ").map(n=>n[0]).join("")}</div>
+        <div style={{fontSize:13,fontWeight:700,color:C.tx}}>{p.name}</div>
+        <div style={{fontSize:11,color:C.txM,marginTop:2}}>{POS_L[p.pos]} · {p.birth_date?calcAge(p.birth_date):p.age}é</div>
+        <div style={{marginTop:6}}><Badge status={p.st}/></div>
+        <div style={{fontSize:10,color:C.txM,marginTop:4}}>Readiness: <strong>{(p.rd*100).toFixed(0)}%</strong></div>
+      </div>)}
+    </div>
+  </div>;
+};
+
 // ═══ MAIN APP ═══
 export default function App() {
   const [auth, setAuth] = useState(null);
@@ -513,6 +583,7 @@ export default function App() {
   const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [tT, setTT] = useState(DEF_TT);
   const [dT, setDT] = useState(DEF_DT);
+  const [lT, setLT] = useState(DEF_LT);
 
   // Load all data
   const loadAll = useCallback(async () => {
@@ -536,7 +607,7 @@ export default function App() {
     if (rRes.data) setRpeLogs(rRes.data);
     if (fRes.data) setForceLogs(fRes.data);
     if (attRes.data) setAttendanceLogs(attRes.data);
-    if (sRes.data) { setTT(sRes.data.training_types || DEF_TT); setDT(sRes.data.dry_types || DEF_DT); }
+    if (sRes.data) { setTT(sRes.data.training_types || DEF_TT); setDT(sRes.data.dry_types || DEF_DT); setLT(sRes.data.league_types || DEF_LT); }
     setLoading(false);
   }, []);
 
@@ -555,7 +626,8 @@ export default function App() {
   if (loading && !roster.length) return <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><Spinner/></div>;
 
   const userRole = auth.user.role;
-  const nav = [{k:"team",l:"Dashboard",i:"👥"},{k:"calendar",l:"Naptár",i:"📅"},{k:"injury",l:"Sérülések",i:"🏥",badge:actI},{k:"alerts",l:"Riasztások",i:"🔔",badge:alC},{k:"settings",l:"Beállítások",i:"⚙️"}];
+  const matchCount=events.filter(e=>e.type==="match").length;
+  const nav = [{k:"team",l:"Dashboard",i:"👥"},{k:"roster",l:"Keret",i:"🏒"},{k:"calendar",l:"Naptár",i:"📅"},{k:"trainings",l:"Edzések",i:"📋"},{k:"matches",l:"Meccsek",i:"🆚",badge:matchCount},{k:"injury",l:"Sérülések",i:"🏥",badge:actI},{k:"alerts",l:"Riasztások",i:"🔔",badge:alC},{k:"settings",l:"Beállítások",i:"⚙️"}];
 
   return (
     <div style={{display:"flex",height:"100vh",background:C.bg,overflow:"hidden",fontFamily:"'Inter',-apple-system,sans-serif"}}>
@@ -573,17 +645,20 @@ export default function App() {
       </div>
       <div style={{flex:1,overflow:"auto"}}>
         <div style={{padding:"11px 20px",borderBottom:"1px solid "+C.brd,display:"flex",justifyContent:"space-between",alignItems:"center",background:C.bg2,position:"sticky",top:0,zIndex:10}}>
-          <div><h1 style={{fontSize:15,fontWeight:800,color:C.tx,margin:0}}>{view==="team"?"Dashboard":view==="player"?(selP?.name||""):view==="calendar"?(selEv?selEv.title:"Naptár"):view==="injury"?"Sérülések":view==="alerts"?"Riasztások":"Beállítások"}</h1><div style={{fontSize:10,color:C.txM}}>{new Date().toLocaleDateString("hu-HU",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div></div>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v5.1</span></div>
+          <div><h1 style={{fontSize:15,fontWeight:800,color:C.tx,margin:0}}>{view==="team"?"Dashboard":view==="player"?(selP?.name||""):view==="calendar"?(selEv?selEv.title:"Naptár"):view==="roster"?"Keret":view==="trainings"?"Edzések":view==="matches"?"Mérkőzések":view==="injury"?"Sérülések":view==="alerts"?"Riasztások":view==="settings"?"Beállítások":"..."}</h1><div style={{fontSize:10,color:C.txM}}>{new Date().toLocaleDateString("hu-HU",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div></div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v5.2</span></div>
         </div>
         <div style={{padding:"16px 20px",maxWidth:1300}}>
           {view==="team"&&<TeamDash players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
           {view==="player"&&selP&&<PlayerView player={selP} onBack={()=>setView("team")} injuries={injuries}/>}
-          {view==="calendar"&&!selEv&&<Cal roster={roster} events={events} onRefresh={loadAll} tTypes={tT} dTypes={dT} coachId={auth.user.id} onOpenEvent={ev=>{setSelEv(ev)}}/>}
+          {view==="calendar"&&!selEv&&<Cal roster={roster} events={events} onRefresh={loadAll} tTypes={tT} dTypes={dT} coachId={auth.user.id} onOpenEvent={ev=>{setSelEv(ev)}} lTypes={lT}/>}
           {view==="calendar"&&selEv&&<EvDetail event={selEv} roster={roster} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} attendanceLogs={attendanceLogs} onRefresh={loadAll} onBack={()=>setSelEv(null)} coachId={auth.user.id} userRole={userRole}/>}
           {view==="injury"&&<InjMgmt roster={roster} injuries={injuries} onRefresh={loadAll} coachId={auth.user.id}/>}
+          {view==="roster"&&<RosterView players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
+          {view==="trainings"&&!selEv&&<TrainList events={events.filter(e=>e.type!=="match")} onOpenEvent={ev=>{setSelEv(ev);setView("calendar")}}/>}
+          {view==="matches"&&!selEv&&<MatchView events={events} onOpenEvent={ev=>{setSelEv(ev);setView("calendar")}}/>}
           {view==="alerts"&&<Alrt players={players}/>}
-          {view==="settings"&&<Sett roster={roster} coaches={coaches} onRefresh={loadAll} tT={tT} dT={dT} userRole={userRole}/>}
+          {view==="settings"&&<Sett roster={roster} coaches={coaches} onRefresh={loadAll} tT={tT} dT={dT} lT={lT} userRole={userRole}/>}
         </div>
       </div>
     </div>
