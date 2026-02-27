@@ -233,7 +233,7 @@ const PRPE=({player,events,onLogout,onRefresh})=>{
       :Number(ws)>=60?<p style={{fontSize:11,color:C.y,margin:0}}>⚡ Figyelj a regenerációra ma! Extra nyújtás és hidratálás ajánlott.</p>
       :<p style={{fontSize:11,color:C.r,margin:0}}>⚠️ Pihenj többet és figyelj az alvásra! Jelezd az edzőnek ha fáradtnak érzed magad.</p>}
     </div>
-    <div style={{marginTop:16,display:"flex",gap:8,justifyContent:"center"}}><Btn onClick={()=>{setStep("wellness");setWellnessSaved(false);setDoneEvs({});setWv(Object.fromEntries(WK.map(k=>[k,3])))}}>Új kitöltés</Btn><Btn v="ghost" onClick={onLogout}>Kilépés</Btn></div>
+    <div style={{marginTop:16,display:"flex",gap:8,justifyContent:"center"}}>{todayEvs.some(ev=>!doneEvs[ev.id])&&<Btn onClick={()=>setStep("events")}>📝 RPE kitöltése ({todayEvs.filter(ev=>!doneEvs[ev.id]).length} edzés)</Btn>}<Btn v="ghost" onClick={onLogout}>Kilépés</Btn></div>
   </div></div>;
 
   return<div style={{minHeight:"100vh",background:C.bg,padding:16,maxWidth:460,margin:"0 auto"}}>
