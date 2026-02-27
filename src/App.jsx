@@ -150,26 +150,70 @@ const PRPE=({player,events,onLogout,onRefresh})=>{
   const[wv,setWv]=useState(Object.fromEntries(WK.map(k=>[k,3])));
   const[rpeSelEv,setRpeSelEv]=useState(null);const[rpe,setRpe]=useState(5);
   const[doneEvs,setDoneEvs]=useState({});
+  // Backlog state
+  const[backlog,setBacklog]=useState([]);const[blStep,setBlStep]=useState(null);const[blWv,setBlWv]=useState(Object.fromEntries(WK.map(k=>[k,3])));const[blRpe,setBlRpe]=useState(5);const[blRpeEv,setBlRpeEv]=useState(null);
   const today=new Date().toISOString().split("T")[0];const todayEvs=events.filter(e=>e.date===today&&(e.player_ids||[]).includes(player.id));
   const rCol=v=>v<=3?C.g:v<=6?C.y:v<=8?C.o:C.r;const ws=((Object.values(wv).reduce((a,b)=>a+b,0)/30)*100).toFixed(0);
+  const dateLabel=ds=>{const d=new Date(ds);const diff=Math.round((new Date(today)-d)/(1000*60*60*24));const name=diff===0?"Ma":diff===1?"Tegnap":diff===2?"Tegnapelőtt":diff+" napja";const fmt=d.toLocaleDateString("hu-HU",{month:"short",day:"numeric"});return `${name} – ${fmt}`};
 
-  // Check existing data on mount
+  // Check existing data + backlog on mount
   useEffect(()=>{(async()=>{
     const{data:existW}=await supabase.from("wellness_logs").select("*").eq("player_id",player.id).eq("date",today).single();
     const{data:existR}=await supabase.from("rpe_logs").select("*").eq("player_id",player.id).eq("date",today);
     const existRpes=existR||[];
+    // Check last 3 days for missing data
+    const bl=[];
+    for(let i=1;i<=3;i++){
+      const d=new Date();d.setDate(d.getDate()-i);const ds=d.toISOString().split("T")[0];
+      const dayEvs=events.filter(e=>e.date===ds&&(e.player_ids||[]).includes(player.id));
+      if(dayEvs.length===0)continue;
+      const{data:wData}=await supabase.from("wellness_logs").select("id").eq("player_id",player.id).eq("date",ds).single();
+      const{data:rData}=await supabase.from("rpe_logs").select("event_id").eq("player_id",player.id).eq("date",ds);
+      const rpeIds=new Set((rData||[]).map(r=>r.event_id));
+      const missingRpe=dayEvs.filter(ev=>!rpeIds.has(ev.id));
+      if(!wData||missingRpe.length>0){bl.push({date:ds,label:dateLabel(ds),missingWellness:!wData,missingRpe,events:dayEvs})}
+    }
+    setBacklog(bl);
     if(existW){
       setWv(Object.fromEntries(WK.map(k=>[k,existW[k]||3])));setWellnessSaved(true);
       const doneMap={};existRpes.forEach(r=>{doneMap[r.event_id]=r.rpe});setDoneEvs(doneMap);
       const allEvsDone=todayEvs.length>0&&todayEvs.every(ev=>doneMap[ev.id]);
-      if(allEvsDone||todayEvs.length===0)setStep("done");else setStep("events");
-    }else{setStep("wellness")}
+      if(allEvsDone||todayEvs.length===0){if(bl.length>0)setStep("backlog");else setStep("done")}else setStep("events");
+    }else{if(bl.length>0)setStep("backlog");else setStep("wellness")}
   })()},[player.id,today]);
+
+  // Backlog save functions
+  const saveBlWellness=async(ds)=>{setSaving(true);const score=Number(((Object.values(blWv).reduce((a,b)=>a+b,0)/30)*100).toFixed(0));await supabase.from("wellness_logs").upsert({player_id:player.id,date:ds,...blWv,wellness_score:score},{onConflict:"player_id,date"});setSaving(false);setBacklog(p=>p.map(b=>b.date===ds?{...b,missingWellness:false}:b));setBlWv(Object.fromEntries(WK.map(k=>[k,3])));if(onRefresh)onRefresh()};
+  const saveBlRpe=async(ev,ds)=>{setSaving(true);await supabase.from("rpe_logs").upsert({player_id:player.id,event_id:ev.id,date:ds,rpe:blRpe,duration:ev.duration},{onConflict:"player_id,event_id"});setSaving(false);setBacklog(p=>p.map(b=>b.date===ds?{...b,missingRpe:b.missingRpe.filter(e=>e.id!==ev.id)}:b));setBlRpeEv(null);setBlRpe(5);if(onRefresh)onRefresh()};
+  const skipBacklog=()=>{if(!wellnessSaved)setStep("wellness");else if(todayEvs.some(ev=>!doneEvs[ev.id]))setStep("events");else setStep("done")};
+  const blDone=backlog.every(b=>!b.missingWellness&&b.missingRpe.length===0);
 
   const saveWellness=async()=>{setSaving(true);await supabase.from("wellness_logs").upsert({player_id:player.id,date:today,...wv,wellness_score:Number(ws)},{onConflict:"player_id,date"});setSaving(false);setWellnessSaved(true);if(todayEvs.length>0)setStep("events");else setStep("done");if(onRefresh)onRefresh()};
   const saveRpe=async(ev)=>{setSaving(true);await supabase.from("rpe_logs").upsert({player_id:player.id,event_id:ev.id,date:today,rpe,duration:ev.duration},{onConflict:"player_id,event_id"});setSaving(false);setDoneEvs(p=>({...p,[ev.id]:rpe}));setRpeSelEv(null);setRpe(5);if(onRefresh)onRefresh()};
 
   if(step==="loading")return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><Spinner/></div>;
+
+  // ── BACKLOG SCREEN ──
+  if(step==="backlog")return<div style={{minHeight:"100vh",background:C.bg,padding:"40px 16px"}}><div style={{maxWidth:480,margin:"0 auto"}}>
+    <div style={{textAlign:"center",marginBottom:20}}><div style={{fontSize:36}}>⏰</div><h2 style={{color:C.tx,fontSize:18,fontWeight:700,marginTop:8}}>Hiányzó kitöltések</h2><p style={{color:C.txM,fontSize:12,marginTop:4}}>Az alábbi napokról nem töltötted ki az adatokat. Pótold most!</p></div>
+    {backlog.filter(b=>b.missingWellness||b.missingRpe.length>0).map(b=><div key={b.date} style={{background:C.card,border:"2px solid "+C.o,borderRadius:14,padding:18,marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><div><span style={{fontSize:14,fontWeight:800,color:C.o}}>📅 {b.label}</span></div><span style={{fontSize:10,padding:"3px 10px",borderRadius:6,background:C.oD,color:C.o,fontWeight:700}}>Pótlás</span></div>
+      {b.missingWellness&&<div style={{background:C.bg2,borderRadius:10,padding:14,marginBottom:8,border:"1px solid "+C.o+"30"}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.tx,marginBottom:8}}>💚 Wellness – {b.label}</div>
+        {WL.map((l,i)=><div key={i} style={{marginBottom:6}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{fontSize:10,color:C.txM}}>{l}</span><span style={{fontSize:10,fontWeight:700,color:C.a}}>{blWv[WK[i]]}/5</span></div><div style={{fontSize:8,color:C.txD,marginBottom:2}}>{WL_DESC[i]}</div><div style={{display:"flex",gap:2}}>{[1,2,3,4,5].map(v=><button key={v} onClick={()=>setBlWv(p=>({...p,[WK[i]]:v}))} style={{flex:1,height:26,borderRadius:5,border:"none",background:blWv[WK[i]]>=v?(v<=2?C.rD:v<=3?C.yD:C.gD):C.bg2,color:blWv[WK[i]]>=v?(v<=2?C.r:v<=3?C.y:C.g):C.txD,cursor:"pointer",fontWeight:700,fontSize:10}}>{v}</button>)}</div></div>)}
+        <Btn full onClick={()=>saveBlWellness(b.date)} disabled={saving} style={{marginTop:6}}>{saving?"⏳":"💾"} Wellness mentése ({b.label})</Btn>
+      </div>}
+      {b.missingRpe.length>0&&<div style={{background:C.bg2,borderRadius:10,padding:14,border:"1px solid "+C.o+"30"}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.tx,marginBottom:8}}>📝 RPE – {b.label}</div>
+        {b.missingRpe.map(ev=><div key={ev.id} style={{marginBottom:8}}>
+          {blRpeEv?.id===ev.id?<div><div style={{fontSize:11,color:C.txM,marginBottom:6}}>{ev.title} · {ev.duration}p</div><div style={{display:"flex",gap:2,marginBottom:6}}>{[1,2,3,4,5,6,7,8,9,10].map(v=><button key={v} onClick={()=>setBlRpe(v)} style={{flex:1,height:32,borderRadius:6,border:"none",background:blRpe===v?(v<=3?C.gD:v<=6?C.yD:v<=8?C.oD:C.rD):C.bg2,color:blRpe===v?(v<=3?C.g:v<=6?C.y:v<=8?C.o:C.r):C.txD,cursor:"pointer",fontWeight:800,fontSize:11}}>{v}</button>)}</div><div style={{display:"flex",gap:6}}><Btn full onClick={()=>saveBlRpe(ev,b.date)} disabled={saving}>{saving?"⏳":"💾"} RPE mentése</Btn><Btn v="ghost" onClick={()=>setBlRpeEv(null)}>Mégse</Btn></div></div>
+          :<div onClick={()=>{setBlRpe(5);setBlRpeEv(ev)}} style={{background:C.card,border:"1px solid "+C.brd,borderRadius:8,padding:10,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:12,color:C.tx}}>{ev.type==="match"?"🆚":"🏒"} {ev.title} · {ev.duration}p</span><span style={{fontSize:11,color:C.a,fontWeight:700}}>Kitöltés →</span></div>}
+        </div>)}
+      </div>}
+    </div>)}
+    <div style={{display:"flex",gap:8,marginTop:16}}>{blDone&&<Btn full v="green" onClick={()=>{if(!wellnessSaved)setStep("wellness");else if(todayEvs.some(ev=>!doneEvs[ev.id]))setStep("events");else setStep("done")}}>✅ Tovább a mai napra →</Btn>}
+    {!blDone&&<Btn full v="secondary" onClick={skipBacklog}>Kihagyom, tovább →</Btn>}</div>
+  </div></div>;
 
   if(step==="done")return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center",padding:40,maxWidth:420}}>
     <div style={{fontSize:52}}>✅</div><h2 style={{color:C.tx,fontSize:18,fontWeight:700,marginTop:12}}>Köszönjük, {player.name.split(" ").pop()}!</h2>
