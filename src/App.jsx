@@ -8,7 +8,7 @@ import {
 import { supabase } from "./lib/supabase";
 
 // ════════════════════════════════════════════════════════
-// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v5.3
+// 🏒 SZJA U16 JÉGHOKI — SPORT SCIENCE PLATFORM v6.0
 // ════════════════════════════════════════════════════════
 // Supabase-integrated version — all data persists!
 
@@ -146,21 +146,44 @@ const Login=({onLogin})=>{
 
 // ═══ PLAYER RPE (MOBILE) ═══
 const PRPE=({player,events,onLogout,onRefresh})=>{
-  const[step,setStep]=useState("wellness");const[saving,setSaving]=useState(false);const[wellnessSaved,setWellnessSaved]=useState(false);
+  const[step,setStep]=useState("loading");const[saving,setSaving]=useState(false);const[wellnessSaved,setWellnessSaved]=useState(false);
   const[wv,setWv]=useState(Object.fromEntries(WK.map(k=>[k,3])));
   const[rpeSelEv,setRpeSelEv]=useState(null);const[rpe,setRpe]=useState(5);
   const[doneEvs,setDoneEvs]=useState({});
   const today=new Date().toISOString().split("T")[0];const todayEvs=events.filter(e=>e.date===today&&(e.player_ids||[]).includes(player.id));
   const rCol=v=>v<=3?C.g:v<=6?C.y:v<=8?C.o:C.r;const ws=((Object.values(wv).reduce((a,b)=>a+b,0)/30)*100).toFixed(0);
 
+  // Check existing data on mount
+  useEffect(()=>{(async()=>{
+    const{data:existW}=await supabase.from("wellness_logs").select("*").eq("player_id",player.id).eq("date",today).single();
+    const{data:existR}=await supabase.from("rpe_logs").select("*").eq("player_id",player.id).eq("date",today);
+    const existRpes=existR||[];
+    if(existW){
+      setWv(Object.fromEntries(WK.map(k=>[k,existW[k]||3])));setWellnessSaved(true);
+      const doneMap={};existRpes.forEach(r=>{doneMap[r.event_id]=r.rpe});setDoneEvs(doneMap);
+      const allEvsDone=todayEvs.length>0&&todayEvs.every(ev=>doneMap[ev.id]);
+      if(allEvsDone||todayEvs.length===0)setStep("done");else setStep("events");
+    }else{setStep("wellness")}
+  })()},[player.id,today]);
+
   const saveWellness=async()=>{setSaving(true);await supabase.from("wellness_logs").upsert({player_id:player.id,date:today,...wv,wellness_score:Number(ws)},{onConflict:"player_id,date"});setSaving(false);setWellnessSaved(true);if(todayEvs.length>0)setStep("events");else setStep("done");if(onRefresh)onRefresh()};
   const saveRpe=async(ev)=>{setSaving(true);await supabase.from("rpe_logs").upsert({player_id:player.id,event_id:ev.id,date:today,rpe,duration:ev.duration},{onConflict:"player_id,event_id"});setSaving(false);setDoneEvs(p=>({...p,[ev.id]:rpe}));setRpeSelEv(null);setRpe(5);if(onRefresh)onRefresh()};
 
-  if(step==="done")return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center",padding:40}}>
-    <div style={{fontSize:52}}>✅</div><h2 style={{color:C.tx,fontSize:18,fontWeight:700,marginTop:12}}>Köszönjük!</h2>
+  if(step==="loading")return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><Spinner/></div>;
+
+  if(step==="done")return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center",padding:40,maxWidth:420}}>
+    <div style={{fontSize:52}}>✅</div><h2 style={{color:C.tx,fontSize:18,fontWeight:700,marginTop:12}}>Köszönjük, {player.name.split(" ").pop()}!</h2>
+    {wellnessSaved&&<p style={{fontSize:11,color:C.txM,marginTop:4}}>A mai kitöltés rögzítve.</p>}
     <div style={{marginTop:12,background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,textAlign:"left"}}>
-      <div style={{fontSize:12,color:C.txM,marginBottom:8}}>💚 Wellness: <strong style={{color:C.a}}>{ws}%</strong></div>
-      {Object.keys(doneEvs).length>0&&<div>{todayEvs.filter(ev=>doneEvs[ev.id]).map(ev=><div key={ev.id} style={{fontSize:12,color:C.txM,marginBottom:4}}>📝 {ev.title}: <strong style={{color:rCol(doneEvs[ev.id])}}>{doneEvs[ev.id]}/10 RPE</strong> · <span style={{color:C.b}}>{doneEvs[ev.id]*ev.duration} AU</span></div>)}</div>}
+      <div style={{fontSize:13,fontWeight:700,color:C.tx,marginBottom:10}}>💚 Mai wellness: <span style={{color:Number(ws)>=80?C.g:Number(ws)>=60?C.y:C.r}}>{ws}%</span></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>{WK.map((k,i)=>{const v=wv[k];return<div key={k} style={{background:C.bg2,borderRadius:6,padding:"6px 8px",textAlign:"center"}}><div style={{fontSize:8,color:C.txD}}>{WL[i].slice(0,6)}</div><div style={{fontSize:16,fontWeight:800,color:v<=2?C.r:v<=3?C.y:C.g}}>{v}/5</div></div>})}</div>
+      {Object.keys(doneEvs).length>0&&<div style={{borderTop:"1px solid "+C.brd,paddingTop:10,marginTop:6}}>{todayEvs.filter(ev=>doneEvs[ev.id]).map(ev=><div key={ev.id} style={{fontSize:12,color:C.txM,marginBottom:4}}>📝 {ev.title}: <strong style={{color:rCol(doneEvs[ev.id])}}>{doneEvs[ev.id]}/10 RPE</strong> · <span style={{color:C.b}}>{doneEvs[ev.id]*ev.duration} AU</span></div>)}</div>}
+    </div>
+    <div style={{marginTop:12,background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:14,textAlign:"left"}}>
+      <div style={{fontSize:11,fontWeight:700,color:C.txM,marginBottom:6}}>📊 Tippek</div>
+      {Number(ws)>=80?<p style={{fontSize:11,color:C.g,margin:0}}>✅ Jó állapotban vagy! Koncentrálj a minőségi munkára.</p>
+      :Number(ws)>=60?<p style={{fontSize:11,color:C.y,margin:0}}>⚡ Figyelj a regenerációra ma! Extra nyújtás és hidratálás ajánlott.</p>
+      :<p style={{fontSize:11,color:C.r,margin:0}}>⚠️ Pihenj többet és figyelj az alvásra! Jelezd az edzőnek ha fáradtnak érzed magad.</p>}
     </div>
     <div style={{marginTop:16,display:"flex",gap:8,justifyContent:"center"}}><Btn onClick={()=>{setStep("wellness");setWellnessSaved(false);setDoneEvs({});setWv(Object.fromEntries(WK.map(k=>[k,3])))}}>Új kitöltés</Btn><Btn v="ghost" onClick={onLogout}>Kilépés</Btn></div>
   </div></div>;
@@ -206,17 +229,40 @@ const PRPE=({player,events,onLogout,onRefresh})=>{
 };
 
 // ═══ TEAM DASHBOARD ═══
-const TeamDash=({players,onSelect})=>{
+const TeamDash=({players,onSelect,wellnessLogs,rpeLogs,events,roster})=>{
   const[sort,setSort]=useState("rd");const[dir,setDir]=useState("asc");const[filter,setFilter]=useState("ALL");
-  const s=useMemo(()=>({avg:(players.reduce((s,p)=>s+p.rd,0)/players.length*100).toFixed(0),g:players.filter(p=>p.st==="GREEN").length,y:players.filter(p=>p.st==="YELLOW").length,r:players.filter(p=>p.st==="RED").length,al:players.reduce((s,p)=>s+p.al.length,0)}),[players]);
+  const today=new Date().toISOString().split("T")[0];
+  const todayW=(wellnessLogs||[]).filter(w=>w.date===today);const todayR=(rpeLogs||[]).filter(r=>r.date===today);
+  const actPlayers=(roster||[]).filter(p=>p.active);
+  const s=useMemo(()=>({avg:(players.reduce((s,p)=>s+p.rd,0)/players.length*100).toFixed(0),g:players.filter(p=>p.st==="GREEN").length,y:players.filter(p=>p.st==="YELLOW").length,r:players.filter(p=>p.st==="RED").length,al:players.reduce((s,p)=>s+p.al.length,0),wToday:todayW.length,wTotal:actPlayers.length}),[players,todayW,actPlayers]);
   const sorted=useMemo(()=>{let f=filter==="ALL"?players:players.filter(p=>p.st===filter);return[...f].sort((a,b)=>dir==="asc"?(a[sort]>b[sort]?1:-1):(a[sort]<b[sort]?1:-1))},[players,sort,dir,filter]);
   const ds=k=>{if(sort===k)setDir(d=>d==="asc"?"desc":"asc");else{setSort(k);setDir("asc")}};
   return<div>
-    <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}><Met label="Átl. Readiness" value={s.avg+"%"} icon="🧠" color={Number(s.avg)>=75?C.g:C.y}/><Met label="Green" value={s.g} icon="✅" color={C.g}/><Met label="Yellow" value={s.y} icon="⚡" color={C.y}/><Met label="Red" value={s.r} icon="🚨" color={C.r}/><Met label="Riasztás" value={s.al} icon="🔔" color={C.r}/></div>
+    <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}><Met label="Átl. Readiness" value={s.avg+"%"} icon="🧠" color={Number(s.avg)>=75?C.g:C.y}/><Met label="Green" value={s.g} icon="✅" color={C.g}/><Met label="Yellow" value={s.y} icon="⚡" color={C.y}/><Met label="Red" value={s.r} icon="🚨" color={C.r}/><Met label="Riasztás" value={s.al} icon="🔔" color={C.r}/><Met label="Mai Wellness" value={s.wToday+"/"+s.wTotal} icon="💚" color={s.wToday===s.wTotal?C.g:C.y}/></div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}><Sec sub="Csapat eloszlás">Readiness %</Sec><ResponsiveContainer width="100%" height={170}><BarChart data={sorted.map(p=>({n:p.name.split(" ")[1]||p.name.split(" ")[0],v:Math.round(p.rd*100)}))}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="n" tick={{fontSize:8,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}} domain={[0,100]}/><Tooltip content={<CTip/>}/><Bar dataKey="v" name="%" radius={[3,3,0,0]}>{sorted.map((p,i)=><Cell key={i} fill={p.st==="GREEN"?C.g:p.st==="YELLOW"?C.y:C.r} fillOpacity={.65}/>)}</Bar></BarChart></ResponsiveContainer></div>
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}><Sec sub="0.8–1.3 optimális">ACWR</Sec><ResponsiveContainer width="100%" height={170}><BarChart data={sorted.map(p=>({n:p.name.split(" ")[1]||p.name.split(" ")[0],v:p.acwr}))}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="n" tick={{fontSize:8,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}} domain={[0,2]}/><Tooltip content={<CTip/>}/><ReferenceLine y={1.5} stroke={C.r} strokeDasharray="4 4"/><ReferenceLine y={0.8} stroke={C.y} strokeDasharray="4 4"/><Bar dataKey="v" name="ACWR" radius={[3,3,0,0]}>{sorted.map((p,i)=><Cell key={i} fill={p.acwr>1.5?C.r:p.acwr<.8?C.y:C.g} fillOpacity={.65}/>)}</Bar></BarChart></ResponsiveContainer></div>
     </div>
+        {/* 7-day team wellness trend */}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:20}}>
+      <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}>
+        <Sec sub="Utolsó 7 nap">💚 Wellness Trend</Sec>
+        <ResponsiveContainer width="100%" height={140}><AreaChart data={Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));const ds=d.toISOString().split("T")[0];const dw=(wellnessLogs||[]).filter(w=>w.date===ds);const avg=dw.length?Math.round(dw.reduce((s,w)=>s+(w.wellness_score||0),0)/dw.length):0;return{d:`${d.getMonth()+1}/${d.getDate()}`,v:avg}})}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="d" tick={{fontSize:9,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}} domain={[0,100]}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="v" name="%" stroke={C.a} fill={C.aD} strokeWidth={2}/></AreaChart></ResponsiveContainer>
+      </div>
+      <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}>
+        <Sec sub="Napi terhelés (AU)">🏋️ Load Trend</Sec>
+        <ResponsiveContainer width="100%" height={140}><BarChart data={Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));const ds=d.toISOString().split("T")[0];const dr=(rpeLogs||[]).filter(r=>r.date===ds);const total=dr.reduce((s,r)=>s+(r.rpe*(r.duration||90)),0);return{d:`${d.getMonth()+1}/${d.getDate()}`,v:total}})}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="d" tick={{fontSize:9,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}}/><Tooltip content={<CTip/>}/><Bar dataKey="v" name="AU" fill={C.b} fillOpacity={.6} radius={[3,3,0,0]}/></BarChart></ResponsiveContainer>
+      </div>
+      <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}>
+        <Sec sub="Kitöltési arány">📋 Compliance</Sec>
+        <ResponsiveContainer width="100%" height={140}><BarChart data={Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));const ds=d.toISOString().split("T")[0];const dw=(wellnessLogs||[]).filter(w=>w.date===ds).length;const tot=actPlayers.length;return{d:`${d.getMonth()+1}/${d.getDate()}`,v:tot?Math.round(dw/tot*100):0}})}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="d" tick={{fontSize:9,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}} domain={[0,100]}/><Tooltip content={<CTip/>}/><Bar dataKey="v" name="%" radius={[3,3,0,0]}>{Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));const ds=d.toISOString().split("T")[0];const dw=(wellnessLogs||[]).filter(w=>w.date===ds).length;const tot=actPlayers.length;const pct=tot?dw/tot*100:0;return<Cell key={i} fill={pct>=90?C.g:pct>=60?C.y:C.r} fillOpacity={.6}/>})}</Bar></BarChart></ResponsiveContainer>
+      </div>
+    </div>
+    {/* Compliance panel */}
+    {todayW.length<actPlayers.length&&<div style={{background:C.rD,border:"1px solid "+C.r+"30",borderRadius:12,padding:16,marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><div style={{fontSize:13,fontWeight:700,color:C.r}}>⚠️ Hiányzó wellness kitöltés ({actPlayers.length-todayW.length} fő)</div><div style={{fontSize:11,color:C.txM}}>Ma: {today}</div></div>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{actPlayers.filter(p=>!todayW.find(w=>w.player_id===p.id)).map(p=><span key={p.id} style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:C.r+"20",color:C.r,fontWeight:600}}>{p.name}</span>)}</div>
+    </div>}
     <div style={{display:"flex",gap:5,marginBottom:12}}>{["ALL","RED","YELLOW","GREEN"].map(f=><Btn key={f} sz="sm" v={filter===f?"primary":"secondary"} onClick={()=>setFilter(f)}>{f==="ALL"?"Mind":f}</Btn>)}</div>
     <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{borderBottom:"1px solid "+C.brd}}>{[{k:"name",l:"Játékos"},{k:"pos",l:"Poz"},{k:"acwr",l:"ACWR"},{k:"jd",l:"Jump Δ"},{k:"as",l:"Asym"},{k:"rd",l:"Readiness"},{k:"st",l:"Státusz"}].map(c=><th key={c.k} onClick={()=>ds(c.k)} style={{padding:"10px 12px",textAlign:"left",fontSize:10,fontWeight:700,color:sort===c.k?C.a:C.txM,textTransform:"uppercase",cursor:"pointer"}}>{c.l}{sort===c.k&&(dir==="asc"?" ↑":" ↓")}</th>)}</tr></thead><tbody>{sorted.map(p=><tr key={p.id} onClick={()=>onSelect(p)} style={{borderBottom:"1px solid "+C.brd,cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=C.cardH} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><td style={{padding:"9px 12px",fontWeight:600,color:C.tx,fontSize:12}}><div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${C.a}40,${C.b}40)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,color:C.a,flexShrink:0}}>{p.name.split(" ").map(n=>n[0]).join("")}</div>{p.name}</div></td><td style={{padding:9,color:C.txM,fontSize:11}}>{p.pos}</td><td style={{padding:9,color:p.acwr>1.5?C.r:p.acwr<.8?C.y:C.g,fontWeight:700}}>{p.acwr.toFixed(2)}</td><td style={{padding:9,color:p.jd<-5?C.r:p.jd>0?C.g:C.y,fontWeight:700}}>{p.jd>0?"+":""}{p.jd}%</td><td style={{padding:9,color:p.as>15?C.r:C.g,fontWeight:700}}>{p.as.toFixed(1)}%</td><td style={{padding:9}}><div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:40,height:4,borderRadius:2,background:C.bg2,overflow:"hidden"}}><div style={{width:p.rd*100+"%",height:"100%",borderRadius:2,background:p.st==="GREEN"?C.g:p.st==="YELLOW"?C.y:C.r}}/></div><span style={{fontSize:11,fontWeight:700}}>{(p.rd*100).toFixed(0)}%</span></div></td><td style={{padding:9}}><Badge status={p.st}/></td></tr>)}</tbody></table></div>
   </div>;
@@ -241,7 +287,7 @@ const PlayerView=({player:p,onBack,injuries})=>{
         <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}><Sec>Wellness 28d</Sec><ResponsiveContainer width="100%" height={200}><AreaChart data={p.days.map(d=>({dl:d.dl,v:d.ws}))}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="dl" tick={{fontSize:8,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}} domain={[0,100]}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="v" name="%" stroke={C.g} fill={C.g} fillOpacity={.1}/></AreaChart></ResponsiveContainer></div>
         <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18}}><Sec>Wellness Radar</Sec><ResponsiveContainer width="100%" height={200}><RadarChart data={WL.map((l,i)=>({label:l,v:p.cur.wv[i],max:5}))}><PolarGrid stroke={C.brd}/><PolarAngleAxis dataKey="label" tick={{fontSize:9,fill:C.txM}}/><PolarRadiusAxis domain={[0,5]} tick={{fontSize:8,fill:C.txD}}/><Radar name="W" dataKey="v" stroke={C.g} fill={C.g} fillOpacity={.2}/></RadarChart></ResponsiveContainer></div>
       </div>
-    </div>}
+    </div></div>}
     {tab==="load"&&<div>
       <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}><Met sm label="Acute" value={p.ac} icon="🔥" color={C.r}/><Met sm label="Chronic" value={p.ch} icon="📊" color={C.b}/><Met sm label="ACWR" value={p.acwr.toFixed(2)} icon="⚖️" color={p.acwr>1.5?C.r:C.g}/></div>
       <div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:18,marginBottom:14}}><Sec>Napi terhelés</Sec><ResponsiveContainer width="100%" height={200}><BarChart data={p.days.map(d=>({dl:d.dl,v:d.load}))}><CartesianGrid strokeDasharray="3 3" stroke={C.brd}/><XAxis dataKey="dl" tick={{fontSize:8,fill:C.txD}}/><YAxis tick={{fontSize:9,fill:C.txM}}/><Tooltip content={<CTip/>}/><Bar dataKey="v" name="Load" fill={C.b} fillOpacity={.5} radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></div>
@@ -705,6 +751,54 @@ const FPEntry=({roster,onRefresh})=>{
   </div>;
 };
 
+
+// ═══ DAILY SUMMARY ═══
+const DailySummary=({roster,events,wellnessLogs,rpeLogs,injuries})=>{
+  const today=new Date().toISOString().split("T")[0];
+  const todayEvs=events.filter(e=>e.date===today);
+  const todayW=wellnessLogs.filter(w=>w.date===today);
+  const todayR=rpeLogs.filter(r=>r.date===today);
+  const actPlayers=roster.filter(p=>p.active);
+  const actInj=injuries.filter(i=>i.rtp_phase<5);
+  const wPct=actPlayers.length?Math.round(todayW.length/actPlayers.length*100):0;
+  const avgWs=todayW.length?Math.round(todayW.reduce((s,w)=>s+(w.wellness_score||0),0)/todayW.length):0;
+  const lowWell=todayW.filter(w=>w.wellness_score<60).map(w=>{const p=roster.find(x=>x.id===w.player_id);return{...w,name:p?.name||"?"}});
+  const highStress=todayW.filter(w=>w.stress<=2).map(w=>{const p=roster.find(x=>x.id===w.player_id);return{...w,name:p?.name||"?"}});
+  const poorSleep=todayW.filter(w=>w.sleep_quality<=2||w.sleep_duration<=2).map(w=>{const p=roster.find(x=>x.id===w.player_id);return{...w,name:p?.name||"?"}});
+  
+  return<div>
+    <Sec sub={today}>📋 Napi összefoglaló</Sec>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginBottom:16}}>
+      <Met label="Wellness kitöltés" value={wPct+"%"} icon="📋" color={wPct>=90?C.g:wPct>=60?C.y:C.r}/>
+      <Met label="Átl. Wellness" value={avgWs?avgWs+"%":"—"} icon="💚" color={avgWs>=80?C.g:avgWs>=60?C.y:C.r}/>
+      <Met label="Mai edzés" value={todayEvs.length} icon="🏒" color={C.b}/>
+      <Met label="Aktív sérülés" value={actInj.length} icon="🏥" color={actInj.length?C.r:C.g}/>
+    </div>
+    
+    {/* Alerts */}
+    {(lowWell.length>0||highStress.length>0||poorSleep.length>0)&&<div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,marginBottom:14}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.tx,marginBottom:10}}>⚠️ Figyelemre méltó</div>
+      {lowWell.length>0&&<div style={{marginBottom:8}}><div style={{fontSize:11,color:C.r,fontWeight:700,marginBottom:4}}>🔴 Alacsony wellness ({"<"}60%)</div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{lowWell.map(w=><span key={w.player_id} style={{fontSize:10,padding:"3px 8px",borderRadius:5,background:C.rD,color:C.r,fontWeight:600}}>{w.name} ({Math.round(w.wellness_score)}%)</span>)}</div></div>}
+      {highStress.length>0&&<div style={{marginBottom:8}}><div style={{fontSize:11,color:C.o,fontWeight:700,marginBottom:4}}>😰 Magas stressz</div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{highStress.map(w=><span key={w.player_id} style={{fontSize:10,padding:"3px 8px",borderRadius:5,background:C.oD,color:C.o,fontWeight:600}}>{w.name}</span>)}</div></div>}
+      {poorSleep.length>0&&<div><div style={{fontSize:11,color:C.p,fontWeight:700,marginBottom:4}}>😴 Rossz alvás</div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{poorSleep.map(w=><span key={w.player_id} style={{fontSize:10,padding:"3px 8px",borderRadius:5,background:C.pD,color:C.p,fontWeight:600}}>{w.name}</span>)}</div></div>}
+    </div>}
+
+    {/* Not filled */}
+    {todayW.length<actPlayers.length&&<div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16,marginBottom:14}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.y,marginBottom:8}}>📋 Nem töltötte ki ({actPlayers.length-todayW.length} fő)</div>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{actPlayers.filter(p=>!todayW.find(w=>w.player_id===p.id)).map(p=><span key={p.id} style={{fontSize:11,padding:"4px 10px",borderRadius:6,background:C.yD,color:C.y,fontWeight:600}}>{p.name}</span>)}</div>
+    </div>}
+
+    {/* Today's events */}
+    {todayEvs.length>0&&<div style={{background:C.card,border:"1px solid "+C.brd,borderRadius:12,padding:16}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.tx,marginBottom:10}}>🏒 Mai edzések</div>
+      {todayEvs.map(ev=><div key={ev.id} style={{background:C.bg2,borderRadius:8,padding:12,marginBottom:6}}>
+        <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,fontWeight:700,color:C.tx}}>{ev.title}</span><span style={{fontSize:11,color:C.txM}}>{ev.time} · {ev.duration}p</span></div>
+      </div>)}
+    </div>}
+  </div>;
+};
+
 // ═══ TRAINING LIST VIEW ═══
 const TrainList=({events,onOpenEvent})=>{
   const[filter,setFilter]=useState("ALL");const[dateF,setDateF]=useState("");
@@ -827,7 +921,7 @@ export default function App() {
 
   const userRole = auth.user.role;
   const matchCount=events.filter(e=>e.type==="match").length;
-  const nav = [{k:"team",l:"Dashboard",i:"👥"},{k:"roster",l:"Keret",i:"🏒"},{k:"calendar",l:"Naptár",i:"📅"},{k:"trainings",l:"Edzések",i:"📋"},{k:"matches",l:"Meccsek",i:"🆚",badge:matchCount},{k:"forceplate",l:"Force Plate",i:"⚡"},{k:"injury",l:"Sérülések",i:"🏥",badge:actI},{k:"alerts",l:"Riasztások",i:"🔔",badge:alC},{k:"settings",l:"Beállítások",i:"⚙️"}];
+  const nav = [{k:"team",l:"Dashboard",i:"👥"},{k:"daily",l:"Mai nap",i:"📋"},{k:"roster",l:"Keret",i:"🏒"},{k:"calendar",l:"Naptár",i:"📅"},{k:"trainings",l:"Edzések",i:"📋"},{k:"matches",l:"Meccsek",i:"🆚",badge:matchCount},{k:"forceplate",l:"Force Plate",i:"⚡"},{k:"injury",l:"Sérülések",i:"🏥",badge:actI},{k:"alerts",l:"Riasztások",i:"🔔",badge:alC},{k:"settings",l:"Beállítások",i:"⚙️"}];
 
   return (
     <div style={{display:"flex",height:"100vh",background:C.bg,overflow:"hidden",fontFamily:"'Inter',-apple-system,sans-serif"}}>
@@ -845,15 +939,16 @@ export default function App() {
       </div>
       <div style={{flex:1,overflow:"auto"}}>
         <div style={{padding:"11px 20px",borderBottom:"1px solid "+C.brd,display:"flex",justifyContent:"space-between",alignItems:"center",background:C.bg2,position:"sticky",top:0,zIndex:10}}>
-          <div><h1 style={{fontSize:15,fontWeight:800,color:C.tx,margin:0}}>{view==="team"?"Dashboard":view==="player"?(selP?.name||""):view==="calendar"?(selEv?selEv.title:"Naptár"):view==="forceplate"?"Force Plate":view==="roster"?"Keret":view==="trainings"?"Edzések":view==="matches"?"Mérkőzések":view==="injury"?"Sérülések":view==="alerts"?"Riasztások":view==="settings"?"Beállítások":"..."}</h1><div style={{fontSize:10,color:C.txM}}>{new Date().toLocaleDateString("hu-HU",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div></div>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v5.3</span></div>
+          <div><h1 style={{fontSize:15,fontWeight:800,color:C.tx,margin:0}}>{view==="team"?"Dashboard":view==="player"?(selP?.name||""):view==="calendar"?(selEv?selEv.title:"Naptár"):view==="daily"?"Mai nap":view==="forceplate"?"Force Plate":view==="roster"?"Keret":view==="trainings"?"Edzések":view==="matches"?"Mérkőzések":view==="injury"?"Sérülések":view==="alerts"?"Riasztások":view==="settings"?"Beállítások":"..."}</h1><div style={{fontSize:10,color:C.txM}}>{new Date().toLocaleDateString("hu-HU",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div></div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>{loading&&<span style={{fontSize:10,color:C.a}}>⏳</span>}<span style={{padding:"3px 8px",borderRadius:6,background:C.aD,fontSize:10,fontWeight:600,color:C.a}}>v6.0</span></div>
         </div>
         <div style={{padding:"16px 20px",maxWidth:1300}}>
-          {view==="team"&&<TeamDash players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
+          {view==="team"&&<TeamDash players={players} onSelect={p=>{setSelP(p);setView("player")}} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} events={events} roster={roster}/>}
           {view==="player"&&selP&&<PlayerView player={selP} onBack={()=>setView("team")} injuries={injuries}/>}
           {view==="calendar"&&!selEv&&<Cal roster={roster} events={events} onRefresh={loadAll} tTypes={tT} dTypes={dT} coachId={auth.user.id} onOpenEvent={ev=>{setSelEv(ev)}} lTypes={lT}/>}
           {view==="calendar"&&selEv&&<EvDetail event={selEv} roster={roster} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} attendanceLogs={attendanceLogs} injuries={injuries} onRefresh={loadAll} onBack={()=>setSelEv(null)} coachId={auth.user.id} userRole={userRole}/>}
           {view==="injury"&&<InjMgmt roster={roster} injuries={injuries} onRefresh={loadAll} coachId={auth.user.id}/>}
+          {view==="daily"&&<DailySummary roster={roster} events={events} wellnessLogs={wellnessLogs} rpeLogs={rpeLogs} injuries={injuries}/>}
           {view==="forceplate"&&<FPEntry roster={roster} onRefresh={loadAll}/>}
           {view==="roster"&&<RosterView players={players} onSelect={p=>{setSelP(p);setView("player")}}/>}
           {view==="trainings"&&!selEv&&<TrainList events={events.filter(e=>e.type!=="match")} onOpenEvent={ev=>{setSelEv(ev);setView("calendar")}}/>}
